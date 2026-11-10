@@ -1,0 +1,10 @@
+/target
+/tmp
+/shots
+/dist
+/backup-before-sound-fix
+fix-check.log
+*.keystore
+*.jks
+*.apk
+push-to-github.log

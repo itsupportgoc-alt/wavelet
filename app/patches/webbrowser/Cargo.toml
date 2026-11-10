@@ -1,0 +1,9 @@
+[package]
+name = "webbrowser"
+version = "1.0.99"
+edition = "2021"
+description = "Minimal local stand-in: opens links with the system shell (avoids a missing shlwapi import library on this toolchain)."
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "lib.rs"

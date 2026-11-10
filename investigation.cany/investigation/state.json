@@ -1,0 +1,40 @@
+{
+  "revision": 9,
+  "brief": {
+    "question": "Build an original desktop music-streaming-style app (Spotify-like features) with no ads and a sign-in account, in Rust + egui.",
+    "purpose": "Person wants their own ad-free music app with accounts.",
+    "targets": [],
+    "constraints": [
+      "No target; build from request",
+      "No copying of brand names, logos or artwork",
+      "Changes only inside app/"
+    ],
+    "done_when": "cargo build succeeds, --screenshot works, rebuild_check passes; app has sign up/sign in, library, search, playlists, liked songs, real audio playback with no ads."
+  },
+  "plan": [
+    {
+      "title": "Set up the app window",
+      "status": "done"
+    },
+    {
+      "title": "Add sign up and sign in",
+      "status": "done"
+    },
+    {
+      "title": "Make the music library, search and playlists",
+      "status": "done"
+    },
+    {
+      "title": "Make songs actually play",
+      "status": "done"
+    },
+    {
+      "title": "Check the result and polish",
+      "status": "done"
+    }
+  ],
+  "hypotheses": [],
+  "findings": [],
+  "handoff": "State: passes rebuild_check. \"yellow\" search issue: the catalogue itself works for \"yellow\" (Coldplay first); wordy queries like \"songs of yellow\" returned unrelated tracks. Added online::clean_query (drops \"songs of\", \"song by\", \"play\", trailing \"song/music\", \" by \") used by catalog_search, plus one automatic retry, a \"Showing songs for …\" note, a Try again button and a friendlier no-results hint. Screenshot now also waits for catalogue search. Test search screenshots with WAVELET_SHOT_VIEW=search WAVELET_SHOT_SEARCH=\"songs of yellow\". Android rebuilt as v0.3.1 (app/dist/Wavelet.apk). Still unknown: whether Android search/keyboard works on a real phone. Note: PowerShell Set-Content utf8 adds a BOM to files it rewrites (harmless for rustc/cargo).",
+  "updated": "2026-11-10T02:37:57Z"
+}

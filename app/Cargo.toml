@@ -1,0 +1,40 @@
+[package]
+name = "wavelet"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "wavelet"
+path = "src/main.rs"
+
+[dependencies]
+rodio = { version = "0.20", features = ["symphonia-all"] }
+lofty = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+fastrand = "2"
+dirs = "5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Built-in web client (search, covers and songs) on every platform.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+# Desktop (Windows / macOS / Linux)
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = "0.31"
+rfd = "0.15"
+
+# Phone (built from the android/ folder)
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "android-native-activity"] }
+
+[patch.crates-io]
+webbrowser = { path = "patches/webbrowser" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

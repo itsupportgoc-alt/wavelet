@@ -1,0 +1,14 @@
+{
+  "id": "unk_15cb47d10c321ed8",
+  "revision": 4,
+  "question": "Can the app offer a streaming catalog like the original service?",
+  "severity": "medium",
+  "domain": "scope",
+  "status": "resolved",
+  "probes": [
+    "Person confirms a licensed music source or API they want to use"
+  ],
+  "evidence_for": [],
+  "evidence_against": [],
+  "resolution": "Every well-known song now shows: Deezer's public catalogue (no key) gives search, top charts, real cover art and 30-second previews, verified live (found \"Blinding Lights\", preview and covers download and decode; screenshots show real chart songs). Full-length playback of major-label songs is not possible through any public API (Spotify's API only links out), so preview songs offer \"Full song on Spotify\". Jamendo (person's own free key) still gives full-length independent songs. No keys copied from GitHub."
+}

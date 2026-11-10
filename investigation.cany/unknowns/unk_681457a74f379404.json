@@ -1,0 +1,13 @@
+{
+  "id": "unk_681457a74f379404",
+  "revision": 1,
+  "question": "Does the Android app run correctly on a real phone (layout, touch, sound, keyboard for search)?",
+  "severity": "medium",
+  "domain": "android",
+  "status": "open",
+  "probes": [
+    "Install app/dist/Wavelet.apk on an arm64 Android 8+ phone and try playing, searching, liking and making a playlist"
+  ],
+  "evidence_for": [],
+  "evidence_against": []
+}

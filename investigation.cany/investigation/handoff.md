@@ -1,0 +1,3 @@
+# Handoff
+
+State: passes rebuild_check. "yellow" search issue: the catalogue itself works for "yellow" (Coldplay first); wordy queries like "songs of yellow" returned unrelated tracks. Added online::clean_query (drops "songs of", "song by", "play", trailing "song/music", " by ") used by catalog_search, plus one automatic retry, a "Showing songs for …" note, a Try again button and a friendlier no-results hint. Screenshot now also waits for catalogue search. Test search screenshots with WAVELET_SHOT_VIEW=search WAVELET_SHOT_SEARCH="songs of yellow". Android rebuilt as v0.3.1 (app/dist/Wavelet.apk). Still unknown: whether Android search/keyboard works on a real phone. Note: PowerShell Set-Content utf8 adds a BOM to files it rewrites (harmless for rustc/cargo).
