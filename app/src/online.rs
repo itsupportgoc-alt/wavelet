@@ -214,12 +214,18 @@ pub fn fresh_preview(id: &str) -> Option<String> {
 fn agent() -> &'static ureq::Agent {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     AGENT.get_or_init(|| {
-        ureq::AgentBuilder::new()
+        let b = ureq::AgentBuilder::new()
             .timeout_connect(std::time::Duration::from_secs(10))
             .timeout_read(std::time::Duration::from_secs(30))
             .user_agent("Wavelet/0.5 (music player)")
-            .redirects(8)
-            .build()
+            .redirects(8);
+        // On computers, use the system's own secure-connection support.
+        #[cfg(not(target_os = "android"))]
+        let b = match native_tls::TlsConnector::new() {
+            Ok(c) => b.tls_connector(Arc::new(c)),
+            Err(_) => b,
+        };
+        b.build()
     })
 }
 

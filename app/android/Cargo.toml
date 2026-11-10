@@ -1,6 +1,6 @@
 [package]
 name = "wavelet-android"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 publish = false
 
@@ -13,6 +13,8 @@ path = "lib.rs"
 wavelet = { path = ".." }
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "android-native-activity"] }
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+# Bundles the C++ runtime the sound system needs. Without it the app cannot start on any phone.
+cpal = { version = "0.15", features = ["oboe-shared-stdcxx"] }
 
 [package.metadata.android]
 package = "com.wavelet.music"
@@ -20,7 +22,7 @@ apk_name = "Wavelet"
 # 64-bit and older 32-bit phones.
 build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
 # App icon pictures (res/mipmap-*).
-resources = "res"
+resources = "icon"
 
 # Local signing key made for this app (keep this file to publish updates).
 [package.metadata.android.signing.release]

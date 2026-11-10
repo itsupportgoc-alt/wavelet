@@ -14,7 +14,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-android.ps1 >> "%LOG%"
 echo [4/4] Uploading to GitHub...
 cd /d "%~dp0"
 git add -A >> "%LOG%" 2>&1
-git commit -m "Wavelet 0.5.1: app icon, sound and search fixes, 32-bit phones" >> "%LOG%" 2>&1
+git commit -m "Wavelet 0.5.2: fix app not opening on phones, app icon, sound and search fixes" >> "%LOG%" 2>&1
 git push origin main >> "%LOG%" 2>&1 || goto fail
 echo ALL DONE >> "%LOG%"
 echo.

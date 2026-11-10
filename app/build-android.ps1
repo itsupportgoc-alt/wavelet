@@ -25,4 +25,11 @@ try {
 $apk = Get-Item "$app\target\android-build\release\apk\Wavelet.apk"
 New-Item -ItemType Directory -Force "$app\dist" | Out-Null
 Copy-Item $apk.FullName "$app\dist\Wavelet.apk" -Force
+# Safety check: the app cannot open on a phone without the C++ runtime inside the APK.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [IO.Compression.ZipFile]::OpenRead("$app\dist\Wavelet.apk")
+$names = $zip.Entries | ForEach-Object { $_.FullName }
+$zip.Dispose()
+Write-Host "APK contents:"; $names | Where-Object { $_ -like "lib/*" -or $_ -like "res/*" } | ForEach-Object { Write-Host "  $_" }
+if (-not ($names | Where-Object { $_ -like "*libc++_shared.so" })) { throw "libc++_shared.so is missing from the APK" }
 Write-Host "Android app ready: $PSScriptRoot\dist\Wavelet.apk"
