@@ -18,6 +18,8 @@ winit = { version = "0.30", default-features = false, features = ["android-nativ
 package = "com.wavelet.music"
 apk_name = "Wavelet"
 build_targets = ["aarch64-linux-android"]
+# App icon pictures (res/mipmap-*).
+resources = "res"
 
 # Local signing key made for this app (keep this file to publish updates).
 [package.metadata.android.signing.release]
@@ -30,6 +32,7 @@ target_sdk_version = 34
 
 [package.metadata.android.application]
 label = "Wavelet"
+icon = "@mipmap/ic_launcher"
 theme = "@android:style/Theme.DeviceDefault.NoActionBar"
 
 [package.metadata.android.application.activity]

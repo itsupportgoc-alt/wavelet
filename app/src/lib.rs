@@ -8,4 +8,4 @@ pub mod player;
 pub mod synth;
 pub mod theme;
 
-pub use app::{set_data_dir, set_keyboard_hook, WaveletApp};
+pub use app::{set_data_dir, set_keyboard_hook, CrashReport, WaveletApp};

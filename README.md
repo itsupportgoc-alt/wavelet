@@ -1,3 +1,5 @@
+<p align="center"><img src="app/android/wavelet-icon-512.png" width="140" alt="Wavelet icon"></p>
+
 # Wavelet
 
 Wavelet is an ad-free music player built with Rust and egui. It runs on Windows and Android.

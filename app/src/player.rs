@@ -5,6 +5,11 @@ use std::fs::File;
 use std::io::BufReader;
 use std::time::{Duration, Instant};
 
+/// Open the speakers. Some phones' sound systems misbehave; never let that close the app.
+fn open_output() -> Option<(OutputStream, OutputStreamHandle)> {
+    std::panic::catch_unwind(|| OutputStream::try_default().ok()).ok().flatten()
+}
+
 /// Audio output. Falls back to a silent clock when no sound device exists
 /// (or in screenshot mode) so the rest of the app behaves the same.
 pub struct Player {
@@ -22,13 +27,9 @@ pub struct Player {
 
 impl Player {
     pub fn new(audio: bool) -> Self {
-        let (stream, handle) = if audio {
-            match OutputStream::try_default() {
-                Ok((s, h)) => (Some(s), Some(h)),
-                Err(_) => (None, None),
-            }
-        } else {
-            (None, None)
+        let (stream, handle) = match if audio { open_output() } else { None } {
+            Some((s, h)) => (Some(s), Some(h)),
+            None => (None, None),
         };
         Self {
             audio,
@@ -60,7 +61,7 @@ impl Player {
         }
         self.handle = None;
         self._stream = None;
-        if let Ok((s, h)) = OutputStream::try_default() {
+        if let Some((s, h)) = open_output() {
             self._stream = Some(s);
             self.handle = Some(h);
         }

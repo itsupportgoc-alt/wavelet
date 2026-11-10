@@ -1817,6 +1817,26 @@ fn is_phone(ctx: &Context) -> bool {
     ctx.screen_rect().width() < 700.0
 }
 
+/// Shown instead of the app when it closed unexpectedly last time, so the reason can be shared.
+pub struct CrashReport {
+    pub text: String,
+}
+
+impl eframe::App for CrashReport {
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ScrollArea::vertical().show(ui, |ui| {
+                ui.add_space(24.0);
+                ui.label(RichText::new("Wavelet closed unexpectedly last time").font(bold(22.0)));
+                ui.add_space(8.0);
+                ui.label("Please take a screenshot of this screen and send it, so it can be fixed. Then close Wavelet and open it again.");
+                ui.add_space(12.0);
+                ui.label(RichText::new(&self.text).monospace().size(12.0));
+            });
+        });
+    }
+}
+
 impl eframe::App for WaveletApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.poll_scan();
