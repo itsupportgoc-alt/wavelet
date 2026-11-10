@@ -16,6 +16,23 @@ How to install:
 
 Works on Android 8.0 or newer, on 64-bit phones (most phones from 2017 onward).
 
+## Screenshots
+
+### Windows
+
+<p align="center">
+  <img src="docs/screenshots/windows-home.png" width="49%" alt="Wavelet on Windows: home page">
+  <img src="docs/screenshots/windows-search.png" width="49%" alt="Wavelet on Windows: search">
+</p>
+
+### Android
+
+<p align="center">
+  <img src="docs/screenshots/android-home.png" width="30%" alt="Wavelet on Android: home">
+  <img src="docs/screenshots/android-playlist.png" width="30%" alt="Wavelet on Android: playlist">
+  <img src="docs/screenshots/android-player.png" width="30%" alt="Wavelet on Android: now playing">
+</p>
+
 ## Features
 
 - Search a song catalogue with 30-second previews, and play full-length songs from Audius
