@@ -23,9 +23,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = "0.31"
 rfd = "0.15"
-# Built-in web client using Windows' own secure connections (needs no C compiler).
-ureq = { version = "2", default-features = false, features = ["native-tls"] }
-native-tls = "0.2"
 
 # Phone (built from the android/ folder)
 [target.'cfg(target_os = "android")'.dependencies]

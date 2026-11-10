@@ -1,3 +1,6 @@
 build-and-publish.log
+build-windows.log
+build-android.log
+publish.log
 push-to-github.log
 Claude outputs/

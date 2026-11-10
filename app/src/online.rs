@@ -210,25 +210,21 @@ pub fn fresh_preview(id: &str) -> Option<String> {
     parse_deezer(&body).ok()?.into_iter().next().map(|t| t.audio)
 }
 
-/// One shared web client, built into the app (no outside tools needed).
+/// One shared web client for the phone app.
+#[cfg(target_os = "android")]
 fn agent() -> &'static ureq::Agent {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     AGENT.get_or_init(|| {
-        let b = ureq::AgentBuilder::new()
+        ureq::AgentBuilder::new()
             .timeout_connect(std::time::Duration::from_secs(10))
             .timeout_read(std::time::Duration::from_secs(30))
             .user_agent("Wavelet/0.5 (music player)")
-            .redirects(8);
-        // On computers, use the system's own secure-connection support.
-        #[cfg(not(target_os = "android"))]
-        let b = match native_tls::TlsConnector::new() {
-            Ok(c) => b.tls_connector(Arc::new(c)),
-            Err(_) => b,
-        };
-        b.build()
+            .redirects(8)
+            .build()
     })
 }
 
+#[cfg(target_os = "android")]
 fn friendly(e: ureq::Error) -> String {
     match e {
         ureq::Error::Status(429, _) => "The music service is busy right now. Try again in a moment.".into(),
@@ -237,12 +233,100 @@ fn friendly(e: ureq::Error) -> String {
     }
 }
 
-/// Download a web address, giving up after `secs`.
+/// Download a web address, giving up after `secs`. Computers use the system's curl; phones use a built-in client.
+#[cfg(not(target_os = "android"))]
+pub fn http_get_within(url: &str, secs: u32) -> Result<Vec<u8>, String> {
+    let limit = secs.to_string();
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args([
+        "-sSL",
+        "--fail",
+        "--compressed",
+        "--connect-timeout",
+        "8",
+        "--max-time",
+        limit.as_str(),
+        "-A",
+        "Wavelet/0.4 (music player)",
+        url,
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let out = cmd.output().map_err(|_| "Couldn't start the download tool (curl).".to_string())?;
+    if !out.status.success() {
+        return Err(OFFLINE_MSG.into());
+    }
+    Ok(out.stdout)
+}
+
+#[cfg(target_os = "android")]
 pub fn http_get_within(url: &str, secs: u32) -> Result<Vec<u8>, String> {
     let resp = agent().get(url).timeout(std::time::Duration::from_secs(secs as u64)).call().map_err(friendly)?;
     let mut buf = Vec::new();
     resp.into_reader().read_to_end(&mut buf).map_err(|_| OFFLINE_MSG.to_string())?;
     Ok(buf)
+}
+
+/// A download coming in piece by piece from curl.
+#[cfg(not(target_os = "android"))]
+struct CurlBody {
+    child: std::process::Child,
+    out: std::process::ChildStdout,
+}
+
+#[cfg(not(target_os = "android"))]
+impl Read for CurlBody {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.out.read(buf)?;
+        if n == 0 {
+            let ok = self.child.wait().map(|s| s.success()).unwrap_or(false);
+            if !ok {
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, "download failed"));
+            }
+        }
+        Ok(n)
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl Drop for CurlBody {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Open a song for downloading piece by piece. Returns the data and its full size (0 = unknown).
+#[cfg(not(target_os = "android"))]
+fn open_body(url: &str) -> Result<(Box<dyn Read + Send>, u64), String> {
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args(["-sSL", "--fail", "--connect-timeout", "10", "--max-time", "600", "-A", "Wavelet/0.5 (music player)", url]);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let mut child = cmd.spawn().map_err(|_| "Couldn't start the download tool (curl).".to_string())?;
+    let out = child.stdout.take().ok_or_else(|| "Couldn't start the download tool (curl).".to_string())?;
+    Ok((Box::new(CurlBody { child, out }), 0))
+}
+
+#[cfg(target_os = "android")]
+fn open_body(url: &str) -> Result<(Box<dyn Read + Send>, u64), String> {
+    let resp = match agent().get(url).call() {
+        Ok(r) => r,
+        Err(_) => {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            agent().get(url).call().map_err(friendly)?
+        }
+    };
+    let len = resp.header("Content-Length").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+    let rd: Box<dyn Read + Send> = Box::new(resp.into_reader());
+    Ok((rd, len))
 }
 
 // ------------------------------------------------------------ streaming (play while downloading)
@@ -316,25 +400,16 @@ pub fn start_stream(url: String, dz_id: Option<String>, cache: PathBuf) -> Arc<S
             Some(id) => fresh_preview(&id).unwrap_or(url),
             None => url,
         };
-        let mut tries = 0;
-        let resp = loop {
-            tries += 1;
-            match agent().get(&url).call() {
-                Ok(r) => break r,
-                Err(e) if tries < 2 => {
-                    let _ = e;
-                    std::thread::sleep(std::time::Duration::from_millis(800));
-                }
-                Err(e) => {
-                    stream_fail(&st2, friendly(e));
-                    return;
-                }
+        let (mut rd, len) = match open_body(&url) {
+            Ok(x) => x,
+            Err(e) => {
+                stream_fail(&st2, e);
+                return;
             }
         };
-        if let Some(n) = resp.header("Content-Length").and_then(|v| v.trim().parse::<u64>().ok()) {
-            st2.total.store(n, Ordering::SeqCst);
+        if len > 0 {
+            st2.total.store(len, Ordering::SeqCst);
         }
-        let mut rd = resp.into_reader();
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             match rd.read(&mut buf) {
@@ -347,7 +422,8 @@ pub fn start_stream(url: String, dz_id: Option<String>, cache: PathBuf) -> Arc<S
                     st2.got.fetch_add(n as u64, Ordering::SeqCst);
                 }
                 Err(_) => {
-                    stream_fail(&st2, "The song stopped downloading. Check your connection, then try again.".into());
+                    let msg = if st2.got.load(Ordering::SeqCst) == 0 { OFFLINE_MSG } else { "The song stopped downloading. Check your connection, then try again." };
+                    stream_fail(&st2, msg.into());
                     return;
                 }
             }
