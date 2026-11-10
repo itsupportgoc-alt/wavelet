@@ -4,7 +4,7 @@ Wavelet is an ad-free music player built with Rust and egui. It runs on Windows 
 
 ## Download for Android
 
-**[⬇ Download Wavelet.apk](https://github.com/itsupportgoc-alt/wavelet/raw/main/dist/Wavelet.apk)**
+**[⬇ Download Wavelet.apk](https://github.com/itsupportgoc-alt/wavelet/raw/main/app/dist/Wavelet.apk)**
 
 How to install:
 
