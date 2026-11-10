@@ -2,10 +2,10 @@
 /android/target
 /tmp
 /shots
-/dist
+/dist/*
+!/dist/Wavelet.apk
 /backup-before-sound-fix
 fix-check.log
 *.keystore
 *.jks
-*.apk
 push-to-github.log
