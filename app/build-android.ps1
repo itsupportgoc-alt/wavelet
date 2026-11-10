@@ -1,4 +1,4 @@
-# Builds the Android app (Wavelet.apk) for 64-bit ARM phones.
+# Builds the Android app (Wavelet.apk) for 64-bit and 32-bit ARM phones.
 # Uses the Android SDK/NDK and cargo-apk unpacked into target\android-tools.
 # Short (8.3) paths are used because the Android tools break on folder names with spaces.
 
@@ -15,7 +15,7 @@ $env:ANDROID_NDK_HOME = $env:ANDROID_NDK_ROOT
 $env:CARGO_TARGET_DIR = "$app\target\android-build"
 $env:PATH = "$tools\cargo\bin;$env:PATH"
 
-rustup target add aarch64-linux-android | Out-Null
+rustup target add aarch64-linux-android armv7-linux-androideabi | Out-Null
 Push-Location "$app\android"
 try {
     cargo apk build --release --lib
