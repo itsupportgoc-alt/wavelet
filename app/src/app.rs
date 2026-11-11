@@ -1098,7 +1098,9 @@ impl WaveletApp {
                     NetMsg::Catalog(q1, r)
                 });
             }
-            if self.hits_state == 0 && self.view == View::Home {
+            // Home shows the top hits, and so does Search before anything is typed.
+            let browsing = self.view == View::Home || (self.view == View::Search && q.is_empty());
+            if self.hits_state == 0 && browsing {
                 self.hits_state = 1;
                 self.hits_since = now;
                 self.spawn_net(|| NetMsg::Hits(crate::safe::catch_res(|| online::top_hits(20))));

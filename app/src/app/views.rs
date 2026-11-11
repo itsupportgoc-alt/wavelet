@@ -503,6 +503,8 @@ impl WaveletApp {
                 });
                 ui.add_space(gap - 6.0);
             }
+            ui.add_space(4.0);
+            self.home_hits(ui);
             return;
         }
 
@@ -580,7 +582,7 @@ impl WaveletApp {
     fn catalog_section(&mut self, ui: &mut Ui) {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Chart songs").font(bold(22.0)));
+            ui.label(RichText::new("Songs").font(bold(22.0)));
             ui.label(RichText::new(online::chart_note()).color(TEXT));
         });
         ui.add_space(4.0);
@@ -624,7 +626,7 @@ impl WaveletApp {
 
     fn home_hits(&mut self, ui: &mut Ui) {
         let ids = self.hits.clone();
-        self.section_title(ui, "Top chart hits", &online::chart_note(), &ids);
+        self.section_title(ui, "Top hits", "· the biggest songs of the biggest artists", &ids);
         ui.add_space(4.0);
         if self.hits_state < 2 {
             ui.horizontal(|ui| {

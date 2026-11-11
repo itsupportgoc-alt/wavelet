@@ -717,8 +717,69 @@ pub fn catalog_search(query: &str, limit: u32) -> Result<Vec<OnlineTrack>, Strin
     }
 }
 
-pub fn top_hits(limit: u32) -> Result<Vec<OnlineTrack>, String> {
+/// The artists behind the songs everyone knows.
+const BIG_ARTISTS: [&str; 14] = [
+    "Ed Sheeran",
+    "Taylor Swift",
+    "The Weeknd",
+    "Drake",
+    "Ariana Grande",
+    "Billie Eilish",
+    "Bruno Mars",
+    "Post Malone",
+    "SZA",
+    "Coldplay",
+    "Dua Lipa",
+    "Kendrick Lamar",
+    "Olivia Rodrigo",
+    "Adele",
+];
+
+/// The catalogue's own chart, i.e. what is big right now.
+fn chart_tracks(limit: u32) -> Result<Vec<OnlineTrack>, String> {
     parse_deezer(&http_get(&format!("{DEEZER}/chart/0/tracks?limit={limit}"))?)
+}
+
+/// Top hits: the best-known song of each of the biggest artists first, because the
+/// catalogue's chart is full of names most people have never heard of, and then today's
+/// chart so the list also shows what is big right now.
+pub fn top_hits(limit: u32) -> Result<Vec<OnlineTrack>, String> {
+    let limit = limit.max(1) as usize;
+    let mut out: Vec<OnlineTrack> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut trouble: Option<String> = None;
+    for artist in BIG_ARTISTS {
+        if out.len() >= limit {
+            break;
+        }
+        match catalog_search(artist, 6) {
+            Ok(list) => {
+                // Their own most popular song, not a collaboration they merely appear on.
+                if let Some(t) = list.into_iter().find(|t| t.artist.to_lowercase() == artist.to_lowercase()) {
+                    let key = format!("{}|{}", t.title.to_lowercase(), t.artist.to_lowercase());
+                    if seen.insert(key) {
+                        out.push(t);
+                    }
+                }
+            }
+            Err(e) => trouble = trouble.or(Some(e)),
+        }
+    }
+    if let Ok(list) = chart_tracks(limit as u32) {
+        for t in list {
+            if out.len() >= limit {
+                break;
+            }
+            let key = format!("{}|{}", t.title.to_lowercase(), t.artist.to_lowercase());
+            if seen.insert(key) {
+                out.push(t);
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(trouble.unwrap_or_else(|| "The song catalogue is busy right now. Try again in a moment.".into()));
+    }
+    Ok(out)
 }
 
 /// Preview links expire after a while, so ask for a fresh one right before downloading.
@@ -1241,6 +1302,27 @@ mod tests {
         println!("whole song: {} KB, {} Hz, {} channels, {} samples decoded", size / 1024, rate, channels, n);
         assert!(size > 1_000_000, "a whole song, not a 30-second clip");
         assert!(n > take / 2, "the audio really decodes");
+    }
+
+    /// Real network: the top hits are the songs of the biggest artists, at real lengths.
+    #[test]
+    #[ignore]
+    fn live_top_hits_are_known_songs() {
+        let hits = top_hits(10).unwrap();
+        assert!(!hits.is_empty());
+        let known = [
+            "Ed Sheeran", "Taylor Swift", "The Weeknd", "Drake", "Ariana Grande", "Billie Eilish", "Bruno Mars",
+            "Post Malone", "SZA", "Coldplay", "Dua Lipa", "Kendrick Lamar", "Olivia Rodrigo", "Adele",
+        ];
+        let mut stars = 0;
+        for t in &hits {
+            println!("{} — {} ({:.0}s)", t.title, t.artist, t.duration);
+            assert!(t.duration > 60.0, "a real song, not a clip: {}", t.title);
+            if known.iter().any(|a| t.artist.eq_ignore_ascii_case(a)) {
+                stars += 1;
+            }
+        }
+        assert!(stars >= 3, "the biggest artists lead the list, got {stars}");
     }
 
     /// Real network: wrong key gives the friendly message; a song file downloads.
