@@ -35,10 +35,10 @@ impl Source for Playable {
 
 /// Open a downloaded song. Music services hand out MP4/M4A files, which need the app's own
 /// reader; everything else goes through the usual decoder.
-fn playable(rd: impl Read + Seek + Send + Sync + 'static) -> Result<Playable, String> {
+fn playable(rd: impl Read + Seek + Send + Sync + 'static, len: Option<u64>) -> Result<Playable, String> {
     let mut rd = crate::safe::skip_tags(rd);
     if crate::m4a::looks_like_mp4(&mut rd) {
-        let song = crate::safe::catch_res(|| crate::m4a::Mp4Audio::open(Box::new(rd)))?;
+        let song = crate::safe::catch_res(|| crate::m4a::Mp4Audio::open(Box::new(rd), len))?;
         return Ok(Playable(Box::new(song)));
     }
     let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(rd)).map_err(|e| format!("Can't play this song: {e}")))?;
@@ -119,7 +119,8 @@ impl Player {
             sink.pause();
             sink.set_volume(self.volume * self.volume);
             let rd = crate::online::StreamState::reader(st)?;
-            let song = crate::safe::SafeSource::new(playable(rd)?);
+            let total = st.total.load(std::sync::atomic::Ordering::SeqCst);
+            let song = crate::safe::SafeSource::new(playable(rd, (total > 0).then_some(total))?);
             if self.duration <= 0.0 {
                 if let Some(d) = song.total_duration() {
                     self.duration = d.as_secs_f32();
@@ -146,7 +147,7 @@ impl Player {
                 TrackSource::Demo(spec) => sink.append(SynthSource::new(spec.clone())),
                 TrackSource::Online { cache, .. } => {
                     let f = File::open(cache).map_err(|_| "This song hasn't finished downloading.".to_string())?;
-                    let song = crate::safe::SafeSource::new(playable(f)?);
+                    let song = crate::safe::SafeSource::new(playable(f, None)?);
                     if self.duration <= 0.0 {
                         if let Some(d) = song.total_duration() {
                             self.duration = d.as_secs_f32();
@@ -156,7 +157,7 @@ impl Player {
                 }
                 TrackSource::File(path) => {
                     let f = File::open(path).map_err(|e| format!("Can't open file: {e}"))?;
-                    let song = crate::safe::SafeSource::new(playable(f)?);
+                    let song = crate::safe::SafeSource::new(playable(f, None)?);
                     if self.duration <= 0.0 {
                         if let Some(d) = song.total_duration() {
                             self.duration = d.as_secs_f32();

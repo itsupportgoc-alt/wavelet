@@ -70,14 +70,18 @@ pub struct Mp4Audio {
 }
 
 impl Mp4Audio {
-    pub fn open(mut reader: Box<dyn AudioReader>) -> Result<Self, String> {
-        // A finished file can say how long it is; a download still arriving cannot.
-        let len = match reader.seek(SeekFrom::End(0)) {
-            Ok(n) => {
-                let _ = reader.seek(SeekFrom::Start(0));
-                Some(n)
-            }
-            Err(_) => None,
+    /// `len` is the size of the finished song. A download still arriving knows that in advance,
+    /// so it can be played from its first part; a finished file can be measured instead.
+    pub fn open(mut reader: Box<dyn AudioReader>, len: Option<u64>) -> Result<Self, String> {
+        let len = match len {
+            Some(n) if n > 0 => Some(n),
+            _ => match reader.seek(SeekFrom::End(0)) {
+                Ok(n) => {
+                    let _ = reader.seek(SeekFrom::Start(0));
+                    Some(n)
+                }
+                Err(_) => None,
+            },
         };
         let mss = MediaSourceStream::new(Box::new(Wrapped { inner: reader, len }), Default::default());
         let mut hint = Hint::new();

@@ -6,9 +6,9 @@ Wavelet is an ad-free music player built with Rust and egui. It runs on Windows 
 
 ## Download for Android
 
-**[⬇ Download Wavelet.apk (version 0.8.0)](https://github.com/itsupportgoc-alt/wavelet/raw/main/app/dist/Wavelet.apk)**
+**[⬇ Download Wavelet.apk (version 0.9.0)](https://github.com/itsupportgoc-alt/wavelet/raw/main/app/dist/Wavelet.apk)**
 
-New in 0.8.0: the top-hits list now leads with the best-known songs of the biggest artists — Ed Sheeran, Taylor Swift, The Weeknd and more — and then the chart, on the computer and on your phone. Songs still play their whole length, with no previews.
+New in 0.9.0: a song starts in seconds instead of taking a minute — the app now fetches each song over several connections at once, because the music service throttles a single one. The top-hits list still leads with the biggest artists and every song plays its whole length.
 
 How to install:
 

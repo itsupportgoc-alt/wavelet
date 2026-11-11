@@ -402,10 +402,17 @@ const INNERTUBE: &str = "https://www.youtube.com/youtubei/v1";
 /// The browser the music service expects, so it answers the way it does for a web player.
 const WEB_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
+/// Where a song's own audio lives, and how big the finished file will be.
+pub struct WholeSong {
+    pub url: String,
+    pub size: u64,
+}
+
 /// The song's own audio, found by name and artist. Works on the phone: no helper programs.
-pub fn whole_song(query: &str) -> Option<String> {
+pub fn whole_song(query: &str) -> Option<WholeSong> {
     let video = video_for(query)?;
-    audio_url(&video)
+    let (url, size) = audio_url(&video)?;
+    Some(WholeSong { url, size })
 }
 
 /// The first song the music service finds for a search.
@@ -438,8 +445,8 @@ fn visitor_id() -> Option<String> {
         .clone()
 }
 
-/// Where the audio of `video` lives (an MP4/AAC file, which the player can read).
-fn audio_url(video: &str) -> Option<String> {
+/// Where the audio of `video` lives (an MP4/AAC file, which the player can read), and how big it is.
+fn audio_url(video: &str) -> Option<(String, u64)> {
     let client = serde_json::json!({
         "clientName": "VISIONOS",
         "clientVersion": "1.02",
@@ -473,7 +480,7 @@ fn audio_url(video: &str) -> Option<String> {
     let body = serde_json::to_string(&body).ok()?;
     let reply = http_post_json(&format!("{INNERTUBE}/player?prettyPrint=false"), &body, &headers).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&reply).ok()?;
-    let mut best: Option<(u64, String)> = None;
+    let mut best: Option<(u64, String, u64)> = None;
     for f in v["streamingData"]["adaptiveFormats"].as_array()? {
         let mime = f["mimeType"].as_str().unwrap_or("");
         // Only MP4/AAC: that is the shape the player can read.
@@ -482,34 +489,120 @@ fn audio_url(video: &str) -> Option<String> {
         }
         if let Some(url) = f["url"].as_str() {
             let bitrate = f["bitrate"].as_u64().unwrap_or(0);
-            if best.as_ref().map_or(true, |(b, _)| bitrate > *b) {
-                best = Some((bitrate, url.to_string()));
+            let size = f["contentLength"].as_str().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            if best.as_ref().map_or(true, |(b, _, _)| bitrate > *b) {
+                best = Some((bitrate, url.to_string(), size));
             }
         }
     }
-    best.map(|(_, u)| u)
+    best.map(|(_, u, n)| (u, n))
 }
 
-/// Download the song's whole audio into `part`, then keep a copy in `cache`.
+/// Download a song's whole audio into `part`, then keep a copy in `cache`.
+///
+/// The music service throttles one connection to a crawl but serves several at full speed, so
+/// the song arrives in a handful of pieces at once. That is the difference between a song
+/// starting in a second and a song starting in a minute.
 fn download_whole_song(query: String, part: PathBuf, cache: PathBuf, st2: Arc<StreamState>) {
-    let Some(url) = whole_song(&query) else {
+    let Some(song) = whole_song(&query) else {
         stream_fail(&st2, "This song couldn't be found in full. Check your connection, then try again.".into());
         return;
     };
-    let (mut rd, len) = match open_with_ua(&url, WEB_UA) {
+    const PIECE: u64 = 384 * 1024;
+    let total = song.size;
+    if total == 0 {
+        // Without a size there is nothing to plan pieces from: fetch it in one go.
+        download_whole_slow(&song.url, &part, &cache, &st2);
+        return;
+    }
+    st2.total.store(total, Ordering::SeqCst);
+    let created = File::create(&part).and_then(|f| f.set_len(total));
+    if let Err(e) = created {
+        stream_fail(&st2, format!("Couldn't save the song: {e}"));
+        return;
+    }
+    let count = ((total + PIECE - 1) / PIECE).clamp(1, 10);
+    let each = (total + count - 1) / count;
+    let ranges: Vec<(u64, u64)> = (0..count)
+        .map(|i| (i * each, (((i + 1) * each).min(total)).saturating_sub(1)))
+        .filter(|(start, end)| start <= end)
+        .collect();
+    let mut failed: Vec<(u64, u64)> = Vec::new();
+    let mut todo = ranges;
+    // Two tries: a piece that drops mid-way is fetched again.
+    for _ in 0..2 {
+        if todo.is_empty() {
+            break;
+        }
+        let mut handles = Vec::new();
+        for (start, end) in todo.drain(..).collect::<Vec<_>>() {
+            let url = song.url.clone();
+            let part = part.clone();
+            let st = st2.clone();
+            handles.push(std::thread::spawn(move || {
+                match open_range(&url, WEB_UA, start, end) {
+                    Ok((mut rd, _)) => {
+                        let mut file = match File::options().write(true).open(&part) {
+                            Ok(f) => f,
+                            Err(_) => return Some((start, end)),
+                        };
+                        if file.seek(SeekFrom::Start(start)).is_err() {
+                            return Some((start, end));
+                        }
+                        let mut buf = vec![0u8; 64 * 1024];
+                        let mut got = 0u64;
+                        loop {
+                            match rd.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    if file.write_all(&buf[..n]).is_err() {
+                                        return Some((start, end));
+                                    }
+                                    got += n as u64;
+                                    st.got.fetch_add(n as u64, Ordering::SeqCst);
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        // A piece that ends early is fetched again.
+                        (got < end - start + 1).then_some((start, end))
+                    }
+                    Err(_) => Some((start, end)),
+                }
+            }));
+        }
+        for h in handles {
+            if let Ok(Some(fell_short)) = h.join() {
+                failed.push(fell_short);
+            }
+        }
+        todo = std::mem::take(&mut failed);
+    }
+    if !todo.is_empty() {
+        let _ = std::fs::remove_file(&part);
+        st2.got.store(0, Ordering::SeqCst);
+        stream_fail(&st2, "The song stopped downloading. Check your connection, then try again.".into());
+        return;
+    }
+    finish_whole_song(&part, &cache, &st2, total);
+}
+
+/// Fetch the song over one connection, for when its size is unknown.
+fn download_whole_slow(url: &str, part: &Path, cache: &Path, st2: &Arc<StreamState>) {
+    let (mut rd, len) = match open_with_ua(url, WEB_UA) {
         Ok(x) => x,
         Err(e) => {
-            stream_fail(&st2, e);
+            stream_fail(st2, e);
             return;
         }
     };
     if len > 0 {
         st2.total.store(len, Ordering::SeqCst);
     }
-    let mut file = match File::create(&part) {
+    let mut file = match File::create(part) {
         Ok(f) => f,
         Err(e) => {
-            stream_fail(&st2, format!("Couldn't save the song: {e}"));
+            stream_fail(st2, format!("Couldn't save the song: {e}"));
             return;
         }
     };
@@ -520,31 +613,37 @@ fn download_whole_song(query: String, part: PathBuf, cache: PathBuf, st2: Arc<St
             Ok(0) => break,
             Ok(n) => {
                 if file.write_all(&buf[..n]).is_err() {
-                    stream_fail(&st2, "Couldn't save the song (is the disk full?).".into());
+                    stream_fail(st2, "Couldn't save the song (is the disk full?).".into());
                     return;
                 }
                 written += n as u64;
+                st2.got.store(written, Ordering::SeqCst);
             }
             Err(_) => {
                 let msg = if written == 0 { OFFLINE_MSG } else { "The song stopped downloading. Check your connection, then try again." };
-                stream_fail(&st2, msg.into());
+                stream_fail(st2, msg.into());
                 return;
             }
         }
     }
     let _ = file.flush();
     drop(file);
-    // The whole file is needed before it can be read, so the song is only reported ready now.
-    let playable = written > 1024 && File::open(&part).map(|mut f| crate::m4a::looks_like_mp4(&mut f)).unwrap_or(false);
-    if !playable {
-        let _ = std::fs::remove_file(&part);
-        stream_fail(&st2, "The whole song couldn't be downloaded. Try again in a moment.".into());
+    finish_whole_song(part, cache, st2, written);
+}
+
+/// Check the finished file, keep a copy for next time, and let the player start.
+fn finish_whole_song(part: &Path, cache: &Path, st2: &Arc<StreamState>, size: u64) {
+    let good = size > 1024 && File::open(part).map(|mut f| crate::m4a::looks_like_mp4(&mut f)).unwrap_or(false);
+    if !good {
+        let _ = std::fs::remove_file(part);
+        st2.got.store(0, Ordering::SeqCst);
+        stream_fail(st2, "The whole song couldn't be downloaded. Try again in a moment.".into());
         return;
     }
-    st2.got.store(written, Ordering::SeqCst);
-    st2.total.store(written, Ordering::SeqCst);
+    st2.got.store(size, Ordering::SeqCst);
+    st2.total.store(size, Ordering::SeqCst);
     let tmp = cache.with_extension(format!("tmp{}", fastrand::u32(..)));
-    if std::fs::copy(&part, &tmp).is_ok() && std::fs::rename(&tmp, &cache).is_err() {
+    if std::fs::copy(part, &tmp).is_ok() && std::fs::rename(&tmp, cache).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     st2.done.store(true, Ordering::SeqCst);
@@ -635,6 +734,45 @@ fn open_with_ua(url: &str, ua: &str) -> Result<(Box<dyn Read + Send>, u64), Stri
     let resp = agent().get(url).set("User-Agent", ua).call().map_err(friendly)?;
     let len = resp.header("Content-Length").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
     Ok((Box::new(resp.into_reader()), len))
+}
+
+/// Open one piece of a web address, so several pieces can be fetched at once.
+#[cfg(not(target_os = "android"))]
+fn open_range(url: &str, ua: &str, start: u64, end: u64) -> Result<(Box<dyn Read + Send>, u64), String> {
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args([
+        "-sSL",
+        "--fail",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "600",
+        "-A",
+        ua,
+        "-r",
+        &format!("{start}-{end}"),
+        url,
+    ]);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let mut child = cmd.spawn().map_err(|_| "Couldn't start the download tool (curl).".to_string())?;
+    let out = child.stdout.take().ok_or_else(|| "Couldn't start the download tool (curl).".to_string())?;
+    Ok((Box::new(CurlBody { child, out }), end - start + 1))
+}
+
+#[cfg(target_os = "android")]
+fn open_range(url: &str, ua: &str, start: u64, end: u64) -> Result<(Box<dyn Read + Send>, u64), String> {
+    let resp = agent()
+        .get(url)
+        .set("User-Agent", ua)
+        .set("Range", &format!("bytes={start}-{end}"))
+        .call()
+        .map_err(friendly)?;
+    Ok((Box::new(resp.into_reader()), end - start + 1))
 }
 
 /// Where to get ffmpeg, which turns songs into files the player can decode.
@@ -917,6 +1055,8 @@ pub struct StreamState {
     /// Full size when the server told us (0 = unknown).
     pub total: AtomicU64,
     pub done: AtomicBool,
+    /// True when the song must arrive completely before it can be played (a whole song).
+    pub whole: AtomicBool,
     pub error: Mutex<Option<String>>,
     /// File the bytes are written to while downloading.
     pub part: PathBuf,
@@ -933,6 +1073,10 @@ impl StreamState {
     pub fn ready(&self) -> bool {
         if self.failed().is_some() {
             return false;
+        }
+        if self.whole.load(Ordering::SeqCst) {
+            // A whole song is one file whose index is at its end: it plays once complete.
+            return self.done.load(Ordering::SeqCst);
         }
         let got = self.got.load(Ordering::SeqCst);
         self.done.load(Ordering::SeqCst) || got >= START_BYTES
@@ -973,6 +1117,7 @@ pub fn start_stream(url: String, dz_id: Option<String>, full_query: Option<Strin
         got: AtomicU64::new(0),
         total: AtomicU64::new(0),
         done: AtomicBool::new(false),
+        whole: AtomicBool::new(whole.is_some()),
         error: Mutex::new(None),
         part: part.clone(),
     });
@@ -1279,18 +1424,43 @@ mod tests {
         pl.stop();
     }
 
+    /// Real network: a whole song arrives in seconds instead of a minute.
+    #[test]
+    #[ignore]
+    fn live_whole_song_downloads_fast() {
+        let dir = std::env::temp_dir().join("wavelet-fast-test");
+        let cache = dir.join("song.m4a");
+        let _ = std::fs::remove_file(&cache);
+        let t0 = std::time::Instant::now();
+        let st = start_stream(String::new(), Some("908604612".into()), Some("The Weeknd Blinding Lights official audio".into()), cache.clone());
+        while !st.done.load(Ordering::SeqCst) && t0.elapsed().as_secs() < 180 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let took = t0.elapsed().as_secs_f32();
+        if let Some(e) = st.failed() {
+            panic!("the download failed: {e}");
+        }
+        println!("whole song in {took:.1}s ({} KB)", st.total.load(Ordering::SeqCst) / 1024);
+        assert!(cache.exists(), "the song was kept for playing");
+        assert!(took < 30.0, "a song should arrive in seconds, took {took:.1}s");
+    }
+
     /// Real network: the song's own audio is found and decodes, with no helper program.
     #[test]
     #[ignore]
     fn live_whole_song() {
-        let url = whole_song("The Weeknd Blinding Lights official audio").expect("a whole song");
+        let whole = whole_song("The Weeknd Blinding Lights official audio").expect("a whole song");
+        // The same road the app takes: several connections at once, then the kept copy.
         let path = std::env::temp_dir().join("wavelet-whole-song.m4a");
-        let (mut rd, _) = open_with_ua(&url, WEB_UA).expect("download starts");
-        let mut out = std::fs::File::create(&path).unwrap();
-        std::io::copy(&mut rd, &mut out).unwrap();
-        drop(out);
+        let _ = std::fs::remove_file(&path);
+        let st = start_stream(String::new(), Some("908604612".into()), Some("The Weeknd Blinding Lights official audio".into()), path.clone());
+        let t0 = std::time::Instant::now();
+        while !st.done.load(Ordering::SeqCst) && t0.elapsed().as_secs() < 120 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(st.failed().is_none(), "download failed: {:?}", st.failed());
         let size = std::fs::metadata(&path).unwrap().len();
-        let mut song = crate::m4a::Mp4Audio::open(Box::new(std::fs::File::open(&path).unwrap())).expect("decodes");
+        let mut song = crate::m4a::Mp4Audio::open(Box::new(std::fs::File::open(&path).unwrap()), Some(whole.size)).expect("decodes");
         use rodio::Source;
         let rate = song.sample_rate();
         let channels = song.channels();
