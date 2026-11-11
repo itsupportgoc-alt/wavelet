@@ -839,6 +839,22 @@ impl WaveletApp {
 
     /// The words of the song playing, scrolling along when the service has timed them.
     fn lyrics_view(&mut self, ui: &mut Ui) {
+        // The song's cover picture fills the page behind the words, darkened so they stay readable.
+        if let Some(t) = self.current.clone().and_then(|id| self.track(&id).cloned()) {
+            let bg = ui.clip_rect();
+            let p = ui.painter().clone();
+            if let Art::Tex(tex) = self.art_for(&t) {
+                // Crop the square cover so it covers the whole page without stretching.
+                let a = (bg.width() / bg.height().max(1.0)).max(0.01);
+                let uv = if a >= 1.0 {
+                    Rect::from_min_max(pos2(0.0, 0.5 - 0.5 / a), pos2(1.0, 0.5 + 0.5 / a))
+                } else {
+                    Rect::from_min_max(pos2(0.5 - 0.5 * a, 0.0), pos2(0.5 + 0.5 * a, 1.0))
+                };
+                p.image(tex, bg, uv, Color32::WHITE);
+                p.rect_filled(bg, cr(0), Color32::from_black_alpha(165));
+            }
+        }
         ui.add_space(4.0);
         ui.label(RichText::new("Lyrics").font(bold(30.0)));
         ui.add_space(6.0);
@@ -877,7 +893,7 @@ impl WaveletApp {
         let mut follow = None;
         for (i, (_, text)) in l.lines.iter().enumerate() {
             let now = cur == Some(i);
-            let col = if now || !l.timed { TEXT } else { SUBTLE };
+            let col = if now || !l.timed { TEXT } else { Color32::from_white_alpha(165) };
             let rt = RichText::new(text).font(if now { bold(21.0) } else { reg(17.0) }).color(col);
             let r = ui.add(egui::Label::new(rt).wrap());
             ui.add_space(if now { 9.0 } else { 4.0 });

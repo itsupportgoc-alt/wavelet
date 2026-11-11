@@ -13,7 +13,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-android.ps1 > "%LOG2%"
 echo [3/3] Uploading to GitHub...
 cd /d "%~dp0"
 git add -A > "%LOG3%" 2>&1
-git commit -m "Wavelet 0.5.5: songs with unreadable tags now play (out of bounds fix)" >> "%LOG3%" 2>&1
+git commit -m "Wavelet 0.10.1: the lyrics page shows the cover picture behind the words" >> "%LOG3%" 2>&1
 git push origin main >> "%LOG3%" 2>&1 || goto fail
 echo.
 echo ALL DONE. The new Wavelet.apk is on GitHub. You can close this window.
