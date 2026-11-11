@@ -1692,7 +1692,9 @@ impl WaveletApp {
             p.rect_filled(sr, cr(22), CARD_HOVER);
             search(&p, pos2(sr.left() + 24.0, sr.center().y), 18.0, SUBTLE, false);
             let inner = Rect::from_min_max(pos2(sr.left() + 44.0, sr.center().y - 11.0), pos2(sr.right() - 16.0, sr.center().y + 11.0));
-            let resp = ui.put(inner, TextEdit::singleline(&mut self.search).frame(false).hint_text("What do you want to listen to?").font(reg(15.0)).desired_width(inner.width()));
+            // The text box is placed on its own, so it doesn't pull the page below up under the bar.
+            let mut field = ui.new_child(UiBuilder::new().max_rect(inner).layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)));
+            let resp = field.add(TextEdit::singleline(&mut self.search).frame(false).hint_text("What do you want to listen to?").font(reg(15.0)).desired_width(inner.width()));
             if self.focus_search {
                 resp.request_focus();
                 self.focus_search = false;
