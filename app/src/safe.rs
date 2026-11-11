@@ -44,6 +44,61 @@ pub fn panic_text(e: &Box<dyn Any + Send>) -> String {
     }
 }
 
+/// A song file seen without the information block (ID3 tag: title, cover picture...) at its start.
+///
+/// Some songs carry a tag the sound library can't read, and it then refuses the whole song
+/// with "out of bounds". The player doesn't need the tag, so it is skipped.
+pub struct SkipTag<R> {
+    inner: R,
+    base: u64,
+}
+
+/// Skip any ID3 tags at the start of a song.
+pub fn skip_tags<R: std::io::Read + std::io::Seek>(mut inner: R) -> SkipTag<R> {
+    use std::io::SeekFrom;
+    let mut base = 0u64;
+    for _ in 0..4 {
+        let mut h = [0u8; 10];
+        if inner.seek(SeekFrom::Start(base)).is_err() || inner.read_exact(&mut h).is_err() {
+            break;
+        }
+        let is_tag = &h[0..3] == b"ID3" && h[3] != 0xFF && h[4] != 0xFF && h[6..10].iter().all(|b| *b < 0x80);
+        if !is_tag {
+            break;
+        }
+        let size = ((h[6] as u64) << 21) | ((h[7] as u64) << 14) | ((h[8] as u64) << 7) | h[9] as u64;
+        let footer = if h[5] & 0x10 != 0 { 10 } else { 0 };
+        base += 10 + size + footer;
+    }
+    if inner.seek(SeekFrom::Start(base)).is_err() {
+        base = 0;
+        let _ = inner.seek(SeekFrom::Start(0));
+    }
+    SkipTag { inner, base }
+}
+
+impl<R: std::io::Read> std::io::Read for SkipTag<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl<R: std::io::Seek> std::io::Seek for SkipTag<R> {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        use std::io::SeekFrom;
+        let abs = match to {
+            SeekFrom::Start(n) => self.inner.seek(SeekFrom::Start(n + self.base))?,
+            other => self.inner.seek(other)?,
+        };
+        if abs < self.base {
+            // Never step back into the tag.
+            self.inner.seek(SeekFrom::Start(self.base))?;
+            return Ok(0);
+        }
+        Ok(abs - self.base)
+    }
+}
+
 /// Wraps a song decoder so a damaged song just ends instead of crashing the sound system.
 pub struct SafeSource<S> {
     inner: S,
@@ -122,5 +177,25 @@ mod tests {
         assert!(r.unwrap_err().contains("out of bounds"));
         assert!(!guarded());
         assert_eq!(catch(|| 5).unwrap(), 5);
+    }
+
+    #[test]
+    fn tag_at_start_is_skipped() {
+        use std::io::{Read, Seek, SeekFrom};
+        // 10-byte header saying "20 bytes of tag", the tag, then the music.
+        let mut data = b"ID3\x04\x00\x00\x00\x00\x00\x14".to_vec();
+        data.extend([7u8; 20]);
+        data.extend(b"MUSIC");
+        let mut r = skip_tags(std::io::Cursor::new(data));
+        let mut out = String::new();
+        r.read_to_string(&mut out).unwrap();
+        assert_eq!(out, "MUSIC");
+        assert_eq!(r.seek(SeekFrom::Start(1)).unwrap(), 1);
+        assert_eq!(r.seek(SeekFrom::End(0)).unwrap(), 5);
+        // No tag: nothing is skipped.
+        let mut r = skip_tags(std::io::Cursor::new(b"MUSIC".to_vec()));
+        let mut out = String::new();
+        r.read_to_string(&mut out).unwrap();
+        assert_eq!(out, "MUSIC");
     }
 }
