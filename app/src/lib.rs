@@ -14,4 +14,4 @@ pub mod theme;
 pub use app::{set_data_dir, set_keyboard_hook, CrashReport, WaveletApp};
 
 /// Shown in the app's profile page, so it is obvious which build is installed.
-pub const VERSION: &str = "0.10.3";
+pub const VERSION: &str = "0.10.4";

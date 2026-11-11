@@ -408,9 +408,9 @@ impl WaveletApp {
             let hc = pos2(r.right() - 100.0, r.center().y);
             let hresp = ui.interact(Rect::from_center_size(hc, vec2(28.0, 28.0)), Id::new(("row_like", row, id)), Sense::click());
             if liked {
-                heart(&p, hc, 15.0, ACCENT, true);
+                heart(&p, hc, 10.0, ACCENT, true);
             } else if hovered || hresp.hovered() {
-                heart(&p, hc, 15.0, if hresp.hovered() { TEXT } else { SUBTLE }, false);
+                heart(&p, hc, 10.0, if hresp.hovered() { TEXT } else { SUBTLE }, false);
             }
             if hresp.clicked() {
                 self.pending.push(Action::ToggleLike(id.clone()));

@@ -1462,7 +1462,7 @@ impl WaveletApp {
         let liked = self.data.liked.contains(&t.id);
         let hc = pos2(r.right() - 82.0, r.center().y);
         let hresp = ui.interact(Rect::from_center_size(hc, vec2(40.0, 40.0)), Id::new("mini_like"), Sense::click());
-        heart(&p, hc, 18.0, if liked { ACCENT } else { TEXT }, liked);
+        heart(&p, hc, 11.5, if liked { ACCENT } else { TEXT }, liked);
         if hresp.clicked() {
             self.pending.push(Action::ToggleLike(t.id.clone()));
         }
@@ -1510,7 +1510,7 @@ impl WaveletApp {
         let liked = self.data.liked.contains(&t.id);
         let hc = pos2(cv.right() - 14.0, y + 22.0);
         let hresp = ui.interact(Rect::from_center_size(hc, vec2(44.0, 44.0)), Id::new("np_big_like"), Sense::click());
-        heart(&p, hc, 22.0, if liked { ACCENT } else { TEXT }, liked);
+        heart(&p, hc, 13.5, if liked { ACCENT } else { TEXT }, liked);
         if hresp.clicked() {
             self.pending.push(Action::ToggleLike(t.id.clone()));
         }
@@ -1774,7 +1774,7 @@ impl WaveletApp {
             let hx = (tr.right().max(cv.right() + 74.0) + 22.0).min(r.left() + left_w - 10.0);
             let hc = pos2(hx, r.center().y);
             let hresp = ui.interact(Rect::from_center_size(hc, vec2(28.0, 28.0)), Id::new("np_like"), Sense::click());
-            heart(&p, hc, 15.0, if liked { ACCENT } else if hresp.hovered() { TEXT } else { SUBTLE }, liked);
+            heart(&p, hc, 10.0, if liked { ACCENT } else if hresp.hovered() { TEXT } else { SUBTLE }, liked);
             if hresp.clicked() {
                 self.pending.push(Action::ToggleLike(t.id.clone()));
             }

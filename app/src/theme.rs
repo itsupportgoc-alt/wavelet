@@ -202,12 +202,13 @@ pub fn heart(p: &Painter, c: Pos2, s: f32, col: Color32, filled: bool) {
             let t = i as f32 / n as f32 * std::f32::consts::TAU;
             let x = 16.0 * t.sin().powi(3);
             let y = 13.0 * t.cos() - 5.0 * (2.0 * t).cos() - 2.0 * (3.0 * t).cos() - (4.0 * t).cos();
-            pos2(c.x + x * k, c.y - y * k - k)
+            // The shape reaches further down than up, so lift it to sit centred on `c`.
+            pos2(c.x + x * k, c.y - y * k - 2.5 * k)
         })
         .collect();
     if filled {
         let mut m = Mesh::default();
-        m.colored_vertex(pos2(c.x, c.y), col);
+        m.colored_vertex(pos2(c.x, c.y - 2.5 * k), col);
         for q in &pts {
             m.colored_vertex(*q, col);
         }
@@ -216,7 +217,7 @@ pub fn heart(p: &Painter, c: Pos2, s: f32, col: Color32, filled: bool) {
         }
         p.add(Shape::mesh(m));
     } else {
-        p.add(Shape::closed_line(pts, Stroke::new(1.6_f32, col)));
+        p.add(Shape::closed_line(pts, Stroke::new(1.8_f32, col)));
     }
 }
 
