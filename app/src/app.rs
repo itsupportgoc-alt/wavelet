@@ -110,6 +110,22 @@ enum NetMsg {
     FullTool(Result<(), String>),
 }
 
+/// The page gliding on after a finger flicks it (phones).
+#[derive(Default)]
+struct Fling {
+    /// Page this belongs to.
+    key: String,
+    /// Time and scroll position of the last frame.
+    t: f64,
+    y: f32,
+    /// Speed the page is gliding at (0 = at rest).
+    vel: f32,
+    /// Speed of the finger while it drags the page, and when it last moved.
+    drag_vel: f32,
+    moved_at: f64,
+    was_down: bool,
+}
+
 struct Mix {
     name: String,
     desc: String,
@@ -235,6 +251,7 @@ pub struct WaveletApp {
     screenshot: Option<PathBuf>,
     frames: u32,
     shot_requested: bool,
+    fling: Fling,
 }
 
 impl WaveletApp {
@@ -317,6 +334,7 @@ impl WaveletApp {
             screenshot,
             frames: 0,
             shot_requested: false,
+            fling: Fling::default(),
         };
         app.rebuild_index();
         if app.ephemeral {
@@ -1320,12 +1338,70 @@ impl WaveletApp {
                     ui.set_clip_rect(card);
                     self.top_bar(ui);
                     let key = format!("{:?}", self.view);
-                    ScrollArea::vertical().id_salt(key).auto_shrink([false, false]).show(ui, |ui| {
+                    // Flick scrolling: when the finger lifts, the page keeps gliding and slows down
+                    // gently, like other phone apps (otherwise it stops dead under the finger).
+                    let (now, down) = ui.input(|i| (i.time, i.pointer.any_down()));
+                    let dt = ((now - self.fling.t) as f32).clamp(0.001, 0.1);
+                    let same = self.fling.key == key;
+                    if !same {
+                        self.fling.key = key.clone();
+                        self.fling.vel = 0.0;
+                        self.fling.drag_vel = 0.0;
+                    }
+                    let mut glide: Option<f32> = None;
+                    if same && self.fling.vel != 0.0 {
+                        if down {
+                            // Touching the page stops it.
+                            self.fling.vel = 0.0;
+                        } else {
+                            glide = Some((self.fling.y - self.fling.vel * dt).max(0.0));
+                            self.fling.vel *= (-1.6 * dt).exp();
+                            if self.fling.vel.abs() < 12.0 {
+                                self.fling.vel = 0.0;
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                    let mut area = ScrollArea::vertical().id_salt(key).auto_shrink([false, false]);
+                    if let Some(y) = glide {
+                        area = area.vertical_scroll_offset(y);
+                    }
+                    let out = area.show(ui, |ui| {
                         Frame::new().inner_margin(Margin { left: 14, right: 14, top: 0, bottom: 24 }).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             self.view_content_safe(ui);
                         });
                     });
+                    let y = out.state.offset.y;
+                    if let Some(want) = glide {
+                        if (want - y).abs() > 0.5 {
+                            // Reached the top or the bottom.
+                            self.fling.vel = 0.0;
+                        }
+                    }
+                    if same && down {
+                        if !self.fling.was_down {
+                            self.fling.drag_vel = 0.0;
+                        }
+                        let dy = y - self.fling.y;
+                        if dy != 0.0 {
+                            let v = -dy / dt;
+                            self.fling.drag_vel = if self.fling.drag_vel == 0.0 { v } else { 0.5 * self.fling.drag_vel + 0.5 * v };
+                            self.fling.moved_at = now;
+                        }
+                    }
+                    if same && !down && self.fling.was_down {
+                        // The finger lifted while the page was moving: let it glide on.
+                        let moving = now - self.fling.moved_at < 0.1 && self.fling.drag_vel.abs() > 80.0;
+                        if moving && out.state.velocity().y.abs() < 1.0 {
+                            self.fling.vel = self.fling.drag_vel.clamp(-7000.0, 7000.0);
+                            ui.ctx().request_repaint();
+                        }
+                        self.fling.drag_vel = 0.0;
+                    }
+                    self.fling.was_down = down;
+                    self.fling.y = y;
+                    self.fling.t = now;
                 });
             });
     }
