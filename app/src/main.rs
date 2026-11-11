@@ -3,6 +3,19 @@
 use eframe::egui;
 use std::path::PathBuf;
 
+/// The Wavelet logo, shown on the taskbar, the window and its shortcut.
+fn window_icon() -> egui::IconData {
+    const LOGO: &[u8] = include_bytes!("../android/wavelet-icon-512.png");
+    match image::load_from_memory(LOGO) {
+        Ok(img) => {
+            let img = img.thumbnail(256, 256).to_rgba8();
+            egui::IconData { rgba: img.as_raw().clone(), width: img.width(), height: img.height() }
+        }
+        // No picture is better than a crash at startup.
+        Err(_) => egui::IconData { rgba: vec![0, 0, 0, 0], width: 1, height: 1 },
+    }
+}
+
 fn main() -> eframe::Result<()> {
     // Problems Wavelet already handles (a damaged song or cover picture) stay quiet.
     let default_hook = std::panic::take_hook();
@@ -36,6 +49,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Wavelet")
+            .with_icon(window_icon())
             .with_inner_size(size)
             .with_min_inner_size([360.0, 560.0]),
         ..Default::default()
