@@ -9,3 +9,4 @@ fix-check.log
 *.keystore
 *.jks
 push-to-github.log
+!/dist/Wavelet.exe

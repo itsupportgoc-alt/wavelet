@@ -4,6 +4,18 @@
 
 Wavelet is an ad-free music player built with Rust and egui. It runs on Windows and Android.
 
+## Download for Windows
+
+**[Download Wavelet.exe for Windows (version 0.9.0)](https://github.com/itsupportgoc-alt/wavelet/raw/main/app/dist/Wavelet.exe)**
+
+How to install:
+
+1. Open the link above on your computer and download `Wavelet.exe` into a folder you keep, such as your Documents folder.
+2. Double-click `Wavelet.exe`. Windows may warn that the publisher is unknown, because the file is not signed: choose **More info**, then **Run anyway**.
+3. Right-click the file and pick **Send to > Desktop (create shortcut)** so Wavelet is one click away.
+
+Works on Windows 10 and 11, 64-bit. Nothing else needs installing: the app keeps your songs and settings in your own user folder.
+
 ## Download for Android
 
 **[⬇ Download Wavelet.apk (version 0.9.0)](https://github.com/itsupportgoc-alt/wavelet/raw/main/app/dist/Wavelet.apk)**
