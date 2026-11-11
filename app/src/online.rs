@@ -29,7 +29,7 @@ pub struct OnlineTrack {
     pub album: String,
     pub duration: f32,
     pub audio: String,
-    /// "deezer" (30-second previews) or "jamendo" (full songs).
+    /// "deezer" (catalogue songs) or "jamendo" (independent artists).
     #[serde(default)]
     pub service: String,
     #[serde(default)]
@@ -38,6 +38,10 @@ pub struct OnlineTrack {
 
 impl OnlineTrack {
     pub fn is_preview(&self) -> bool {
+        self.service == "deezer"
+    }
+    /// A song from the catalogue: the real songs people search for.
+    pub fn is_catalogue(&self) -> bool {
         self.service == "deezer"
     }
     /// Short tag used in ids and cache file names.
@@ -201,7 +205,7 @@ pub fn refresh_tools() {
     }
 }
 
-/// True when songs play their whole length instead of a 30-second preview.
+/// True when the helper program that fetches whole songs is installed.
 pub fn full_songs_available() -> bool {
     yt_dlp().is_some() && ffmpeg().is_some()
 }
@@ -256,12 +260,10 @@ pub fn phone() -> bool {
 
 /// What the song lists say about chart songs right now.
 pub fn chart_note() -> String {
-    if full_songs_available() {
-        "· full songs · right-click a song for more options".into()
-    } else if phone() {
-        "· real songs · 30-second previews on a phone".into()
+    if phone() {
+        "· the real songs · played in full".into()
     } else {
-        "· 30-second previews · turn on full-length songs in your Profile".into()
+        "· full songs · right-click a song for more options".into()
     }
 }
 
@@ -304,7 +306,7 @@ pub fn install_full_support() -> Result<PathBuf, String> {
 /// Phones can't run the helper: they keep the previews.
 #[cfg(target_os = "android")]
 pub fn install_full_support() -> Result<PathBuf, String> {
-    Err("Full-length songs need the computer version of the app.".into())
+    Err("Full-length songs are built in on a phone: nothing to install.".into())
 }
 
 /// True when the first bytes are a song file the player can decode.
@@ -394,59 +396,245 @@ fn download_full_song(part: PathBuf, query: String, cache: PathBuf, st2: Arc<Str
     st2.done.store(true, Ordering::SeqCst);
 }
 
-// ------------------------------------------------------------ whole songs without the helper
+// ------------------------------------------------------------ the song's own audio
 
-fn words(s: &str) -> Vec<String> {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
-        .filter(|w| w.len() > 1)
-        .map(|w| w.to_string())
-        .collect()
+const INNERTUBE: &str = "https://www.youtube.com/youtubei/v1";
+/// The browser the music service expects, so it answers the way it does for a web player.
+const WEB_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+
+/// The song's own audio, found by name and artist. Works on the phone: no helper programs.
+pub fn whole_song(query: &str) -> Option<String> {
+    let video = video_for(query)?;
+    audio_url(&video)
 }
 
-/// Best full-length version of a song among `list`, or none when nothing really matches.
-fn pick_full_version(list: Vec<OnlineTrack>, title: &str, artist: &str) -> Option<OnlineTrack> {
-    let want = words(title);
-    if want.is_empty() {
-        return None;
+/// The first song the music service finds for a search.
+fn video_for(query: &str) -> Option<String> {
+    let page = http_get_with_ua(&format!("https://www.youtube.com/results?search_query={}", encode(query)), WEB_UA).ok()?;
+    let page = String::from_utf8_lossy(&page).to_string();
+    // A real search result, not a promoted shelf.
+    let mut rest = page.as_str();
+    if let Some(at) = page.find("\"videoRenderer\":") {
+        rest = &page[at..];
     }
-    let by = words(artist);
-    let mut best: Option<(i32, OnlineTrack)> = None;
-    for t in list {
-        if t.duration < 60.0 {
-            continue;
-        }
-        let have = words(&t.title);
-        let hits = want.iter().filter(|w| have.iter().any(|h| h == *w)).count();
-        if hits == 0 {
-            continue;
-        }
-        // Every word of the song's name should be there; extra words ("cover", "remix") cost a little.
-        let mut score = hits as i32 * 10 - (have.len().saturating_sub(want.len()) as i32) * 2;
-        // Only the song's own artist counts here: anything else is a cover or a remix, and a
-        // different recording must never be presented as the song.
-        let theirs = words(&t.artist);
-        if by.is_empty() || !theirs.iter().any(|w| by.contains(w)) {
-            continue;
-        }
-        if t.duration >= 120.0 {
-            score += 5;
-        }
-        if best.as_ref().map_or(true, |(b, _)| score > *b) {
-            best = Some((score, t));
-        }
-    }
-    best.filter(|(score, _)| *score >= 10).map(|(_, t)| t)
+    let tag = "\"videoId\":\"";
+    let at = rest.find(tag)? + tag.len();
+    let id: String = rest[at..].chars().take(11).collect();
+    (id.len() == 11).then_some(id)
 }
 
-/// The song's whole length from a service that shares whole songs, no helper needed.
-/// Phones use this; the desktop app fetches every chart song in full instead.
-pub fn full_version(title: &str, artist: &str) -> Option<OnlineTrack> {
-    let list = full_search(&format!("{title} {artist}"), 12).ok()?;
-    pick_full_version(list, title, artist)
+/// The service wants a visitor stamp before it hands out a song's address.
+fn visitor_id() -> Option<String> {
+    static VISITOR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    VISITOR
+        .get_or_init(|| {
+            let page = http_get_with_ua("https://www.youtube.com/", WEB_UA).ok()?;
+            let page = String::from_utf8_lossy(&page).to_string();
+            let tag = "\"visitorData\":\"";
+            let at = page.find(tag)? + tag.len();
+            let v: String = page[at..].chars().take_while(|c| *c != '"').collect();
+            (!v.is_empty()).then_some(v)
+        })
+        .clone()
+}
+
+/// Where the audio of `video` lives (an MP4/AAC file, which the player can read).
+fn audio_url(video: &str) -> Option<String> {
+    let client = serde_json::json!({
+        "clientName": "VISIONOS",
+        "clientVersion": "1.02",
+        "deviceMake": "Apple",
+        "deviceModel": "RealityDevice17,1",
+        "userAgent": WEB_UA,
+        "osName": "visionOS",
+        "osVersion": "26.5.23O471",
+        "hl": "en",
+        "timeZone": "UTC",
+        "utcOffsetMinutes": 0
+    });
+    let body = serde_json::json!({
+        "context": { "client": client },
+        "videoId": video,
+        "playbackContext": { "contentPlaybackContext": { "html5Preference": "HTML5_PREF_WANTS" } },
+        "contentCheckOk": true,
+        "racyCheckOk": true
+    });
+    let visitor = visitor_id();
+    let mut headers = vec![
+        ("User-Agent", WEB_UA),
+        ("X-Youtube-Client-Name", "101"),
+        ("X-Youtube-Client-Version", "1.02"),
+        ("Origin", "https://www.youtube.com"),
+        ("Accept-Language", "en-us,en;q=0.5"),
+    ];
+    if let Some(v) = visitor.as_deref() {
+        headers.push(("X-Goog-Visitor-Id", v));
+    }
+    let body = serde_json::to_string(&body).ok()?;
+    let reply = http_post_json(&format!("{INNERTUBE}/player?prettyPrint=false"), &body, &headers).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&reply).ok()?;
+    let mut best: Option<(u64, String)> = None;
+    for f in v["streamingData"]["adaptiveFormats"].as_array()? {
+        let mime = f["mimeType"].as_str().unwrap_or("");
+        // Only MP4/AAC: that is the shape the player can read.
+        if !mime.starts_with("audio/mp4") {
+            continue;
+        }
+        if let Some(url) = f["url"].as_str() {
+            let bitrate = f["bitrate"].as_u64().unwrap_or(0);
+            if best.as_ref().map_or(true, |(b, _)| bitrate > *b) {
+                best = Some((bitrate, url.to_string()));
+            }
+        }
+    }
+    best.map(|(_, u)| u)
+}
+
+/// Download the song's whole audio into `part`, then keep a copy in `cache`.
+fn download_whole_song(query: String, part: PathBuf, cache: PathBuf, st2: Arc<StreamState>) {
+    let Some(url) = whole_song(&query) else {
+        stream_fail(&st2, "This song couldn't be found in full. Check your connection, then try again.".into());
+        return;
+    };
+    let (mut rd, len) = match open_with_ua(&url, WEB_UA) {
+        Ok(x) => x,
+        Err(e) => {
+            stream_fail(&st2, e);
+            return;
+        }
+    };
+    if len > 0 {
+        st2.total.store(len, Ordering::SeqCst);
+    }
+    let mut file = match File::create(&part) {
+        Ok(f) => f,
+        Err(e) => {
+            stream_fail(&st2, format!("Couldn't save the song: {e}"));
+            return;
+        }
+    };
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut written = 0u64;
+    loop {
+        match rd.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if file.write_all(&buf[..n]).is_err() {
+                    stream_fail(&st2, "Couldn't save the song (is the disk full?).".into());
+                    return;
+                }
+                written += n as u64;
+            }
+            Err(_) => {
+                let msg = if written == 0 { OFFLINE_MSG } else { "The song stopped downloading. Check your connection, then try again." };
+                stream_fail(&st2, msg.into());
+                return;
+            }
+        }
+    }
+    let _ = file.flush();
+    drop(file);
+    // The whole file is needed before it can be read, so the song is only reported ready now.
+    let playable = written > 1024 && File::open(&part).map(|mut f| crate::m4a::looks_like_mp4(&mut f)).unwrap_or(false);
+    if !playable {
+        let _ = std::fs::remove_file(&part);
+        stream_fail(&st2, "The whole song couldn't be downloaded. Try again in a moment.".into());
+        return;
+    }
+    st2.got.store(written, Ordering::SeqCst);
+    st2.total.store(written, Ordering::SeqCst);
+    let tmp = cache.with_extension(format!("tmp{}", fastrand::u32(..)));
+    if std::fs::copy(&part, &tmp).is_ok() && std::fs::rename(&tmp, &cache).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    st2.done.store(true, Ordering::SeqCst);
+}
+
+/// A web address asked for with a particular browser name.
+#[cfg(not(target_os = "android"))]
+fn http_get_with_ua(url: &str, ua: &str) -> Result<Vec<u8>, String> {
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args(["-sSL", "--fail", "--compressed", "--connect-timeout", "8", "--max-time", "25", "-A", ua, url]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let out = cmd.output().map_err(|_| "Couldn't start the download tool (curl).".to_string())?;
+    if !out.status.success() {
+        return Err(OFFLINE_MSG.into());
+    }
+    Ok(out.stdout)
+}
+
+#[cfg(target_os = "android")]
+fn http_get_with_ua(url: &str, ua: &str) -> Result<Vec<u8>, String> {
+    let resp = agent().get(url).set("User-Agent", ua).timeout(std::time::Duration::from_secs(25)).call().map_err(friendly)?;
+    let mut buf = Vec::new();
+    resp.into_reader().read_to_end(&mut buf).map_err(|_| OFFLINE_MSG.to_string())?;
+    Ok(buf)
+}
+
+/// A question for a web service that answers in JSON.
+#[cfg(not(target_os = "android"))]
+fn http_post_json(url: &str, body: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args(["-sSL", "--fail", "--compressed", "--connect-timeout", "8", "--max-time", "25"]);
+    cmd.args(["-H", "Content-Type: application/json", "--data-binary", "@-", url]);
+    for (k, v) in headers {
+        cmd.args(["-H", &format!("{k}: {v}")]);
+    }
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let mut child = cmd.spawn().map_err(|_| "Couldn't start the download tool (curl).".to_string())?;
+    {
+        let mut input = child.stdin.take().ok_or_else(|| "Couldn't start the download tool (curl).".to_string())?;
+        input.write_all(body.as_bytes()).map_err(|_| OFFLINE_MSG.to_string())?;
+    }
+    let out = child.wait_with_output().map_err(|_| OFFLINE_MSG.to_string())?;
+    if !out.status.success() {
+        return Err(OFFLINE_MSG.into());
+    }
+    Ok(out.stdout)
+}
+
+#[cfg(target_os = "android")]
+fn http_post_json(url: &str, body: &str, headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
+    let mut req = agent().post(url).set("Content-Type", "application/json");
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    let resp = req.send_string(body).map_err(friendly)?;
+    let mut buf = Vec::new();
+    resp.into_reader().read_to_end(&mut buf).map_err(|_| OFFLINE_MSG.to_string())?;
+    Ok(buf)
+}
+
+/// Open a web address as the browser the music service expects.
+#[cfg(not(target_os = "android"))]
+fn open_with_ua(url: &str, ua: &str) -> Result<(Box<dyn Read + Send>, u64), String> {
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args(["-sSL", "--fail", "--connect-timeout", "10", "--max-time", "600", "-A", ua, url]);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let mut child = cmd.spawn().map_err(|_| "Couldn't start the download tool (curl).".to_string())?;
+    let out = child.stdout.take().ok_or_else(|| "Couldn't start the download tool (curl).".to_string())?;
+    Ok((Box::new(CurlBody { child, out }), 0))
+}
+
+#[cfg(target_os = "android")]
+fn open_with_ua(url: &str, ua: &str) -> Result<(Box<dyn Read + Send>, u64), String> {
+    let resp = agent().get(url).set("User-Agent", ua).call().map_err(friendly)?;
+    let len = resp.header("Content-Length").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+    Ok((Box::new(resp.into_reader()), len))
 }
 
 /// Where to get ffmpeg, which turns songs into files the player can decode.
@@ -708,12 +896,18 @@ pub fn start_stream(url: String, dz_id: Option<String>, full_query: Option<Strin
     if let Some(p) = cache.parent() {
         let _ = std::fs::create_dir_all(p);
     }
-    // The whole song arrives as one finished file, so playback starts once it is there.
+    // A whole song comes from the helper program when it is there, and straight from the music
+    // service when it isn't. Either way the song plays its real length.
     let whole = match (&full_query, &dz_id) {
-        (Some(q), Some(_)) if full_songs_available() => Some(q.clone()),
+        (Some(q), Some(_)) if full_songs_available() => Some((true, q.clone())),
+        (Some(q), Some(_)) => Some((false, q.clone())),
         _ => None,
     };
-    let part = if whole.is_some() { cache.with_extension(format!("part{}.mp3", fastrand::u32(..))) } else { cache.with_extension(format!("part{}", fastrand::u32(..))) };
+    let part = match &whole {
+        Some((true, _)) => cache.with_extension(format!("part{}.mp3", fastrand::u32(..))),
+        Some((false, _)) => cache.with_extension(format!("part{}.m4a", fastrand::u32(..))),
+        None => cache.with_extension(format!("part{}", fastrand::u32(..))),
+    };
     let st = Arc::new(StreamState {
         got: AtomicU64::new(0),
         total: AtomicU64::new(0),
@@ -724,10 +918,17 @@ pub fn start_stream(url: String, dz_id: Option<String>, full_query: Option<Strin
     let st2 = st.clone();
     let st3 = st.clone();
     match whole {
-        Some(query) => {
+        Some((true, query)) => {
             std::thread::spawn(move || {
                 // A damaged download must never close the app.
                 if let Err(e) = crate::safe::catch(move || download_full_song(part, query, cache, st2)) {
+                    stream_fail(&st3, format!("This song couldn't be downloaded ({e})."));
+                }
+            });
+        }
+        Some((false, query)) => {
+            std::thread::spawn(move || {
+                if let Err(e) = crate::safe::catch(move || download_whole_song(query, part, cache, st2)) {
                     stream_fail(&st3, format!("This song couldn't be downloaded ({e})."));
                 }
             });
@@ -1017,66 +1218,29 @@ mod tests {
         pl.stop();
     }
 
-    #[test]
-    fn picks_a_matching_whole_song() {
-        let t = |id: &str, title: &str, artist: &str, secs: f32| OnlineTrack {
-            id: id.into(),
-            title: title.into(),
-            artist: artist.into(),
-            album: String::new(),
-            duration: secs,
-            audio: String::new(),
-            service: "audius".into(),
-            cover: String::new(),
-        };
-        let list = vec![
-            t("a", "Blinding Lights", "MRecord", 155.0),
-            t("b", "Sign of the Times", "Cover Band", 240.0),
-            t("c", "Blinding Lights", "The Weeknd", 200.0),
-            t("d", "Blinding Lights (30s clip)", "Someone", 30.0),
-        ];
-        let got = pick_full_version(list, "Blinding Lights", "The Weeknd").unwrap();
-        assert_eq!(got.id, "c", "the artist's own full song wins");
-        // Nothing that resembles the song: no swap, the preview stays.
-        let list = vec![t("x", "Completely Different", "Nobody", 200.0)];
-        assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
-        // Someone else's copy of the song (cover, remix, re-upload) is not the song.
-        let list = vec![t("a", "Blinding Lights", "MRecord", 155.0)];
-        assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
-        // A clip is never used instead of the whole song.
-        let list = vec![t("y", "Blinding Lights", "The Weeknd", 30.0)];
-        assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
-    }
-
-    /// Real network: a song that an artist published whole is found, nobody else's is used.
+    /// Real network: the song's own audio is found and decodes, with no helper program.
     #[test]
     #[ignore]
-    fn live_full_version_lookup() {
-        let known = trending_full(8).unwrap();
-        let first = known.into_iter().find(|t| t.duration > 90.0).expect("trending songs");
-        let found = full_version(&first.title, &first.artist).expect("the artist's own whole song");
-        println!("{} by {} -> {} ({:.0}s)", first.title, first.artist, found.title, found.duration);
-        assert!(found.duration > 60.0);
-        assert!(words(&found.artist).iter().any(|w| words(&first.artist).contains(w)));
-        // Made-up songs are never claimed.
-        assert!(full_version("Qzxv Not A Song", "Qzxv Nobody").is_none());
-    }
-
-    /// Real network: how many of today's chart songs have a whole version (what a phone can play).
-    #[test]
-    #[ignore]
-    fn live_whole_version_coverage() {
-        let hits = top_hits(8).expect("charts load");
-        let mut whole = 0;
-        for s in &hits {
-            let found = full_version(&s.title, &s.artist);
-            if found.is_some() {
-                whole += 1;
-            }
-            let shown = found.as_ref().map(|x| format!("{} by {} ({:.0}s)", x.title, x.artist, x.duration));
-            println!("{:<34} {:<20} -> {}", s.title, s.artist, shown.unwrap_or_else(|| "no whole version".into()));
+    fn live_whole_song() {
+        let url = whole_song("The Weeknd Blinding Lights official audio").expect("a whole song");
+        let path = std::env::temp_dir().join("wavelet-whole-song.m4a");
+        let (mut rd, _) = open_with_ua(&url, WEB_UA).expect("download starts");
+        let mut out = std::fs::File::create(&path).unwrap();
+        std::io::copy(&mut rd, &mut out).unwrap();
+        drop(out);
+        let size = std::fs::metadata(&path).unwrap().len();
+        let mut song = crate::m4a::Mp4Audio::open(Box::new(std::fs::File::open(&path).unwrap())).expect("decodes");
+        use rodio::Source;
+        let rate = song.sample_rate();
+        let channels = song.channels();
+        let take = (rate as usize) * (channels as usize) * 3; // three seconds of audio
+        let mut n = 0;
+        for _ in song.by_ref().take(take) {
+            n += 1;
         }
-        println!("{whole} of {} chart songs have a whole version", hits.len());
+        println!("whole song: {} KB, {} Hz, {} channels, {} samples decoded", size / 1024, rate, channels, n);
+        assert!(size > 1_000_000, "a whole song, not a 30-second clip");
+        assert!(n > take / 2, "the audio really decodes");
     }
 
     /// Real network: wrong key gives the friendly message; a song file downloads.

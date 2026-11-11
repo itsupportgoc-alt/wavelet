@@ -2,8 +2,48 @@ use crate::library::{Track, TrackSource};
 use crate::synth::SynthSource;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Seek};
 use std::time::{Duration, Instant};
+
+/// A song ready to play, whichever way its file is encoded.
+struct Playable(Box<dyn Source<Item = i16> + Send>);
+
+impl Iterator for Playable {
+    type Item = i16;
+    fn next(&mut self) -> Option<i16> {
+        self.0.next()
+    }
+}
+
+impl Source for Playable {
+    fn current_frame_len(&self) -> Option<usize> {
+        self.0.current_frame_len()
+    }
+    fn channels(&self) -> u16 {
+        self.0.channels()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.0.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.0.total_duration()
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.0.try_seek(pos)
+    }
+}
+
+/// Open a downloaded song. Music services hand out MP4/M4A files, which need the app's own
+/// reader; everything else goes through the usual decoder.
+fn playable(rd: impl Read + Seek + Send + Sync + 'static) -> Result<Playable, String> {
+    let mut rd = crate::safe::skip_tags(rd);
+    if crate::m4a::looks_like_mp4(&mut rd) {
+        let song = crate::safe::catch_res(|| crate::m4a::Mp4Audio::open(Box::new(rd)))?;
+        return Ok(Playable(Box::new(song)));
+    }
+    let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(rd)).map_err(|e| format!("Can't play this song: {e}")))?;
+    Ok(Playable(Box::new(dec)))
+}
 
 /// Open the speakers. Some phones' sound systems misbehave; never let that close the app.
 fn open_output() -> Option<(OutputStream, OutputStreamHandle)> {
@@ -79,14 +119,13 @@ impl Player {
             sink.pause();
             sink.set_volume(self.volume * self.volume);
             let rd = crate::online::StreamState::reader(st)?;
-            let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(crate::safe::skip_tags(rd))).map_err(|e| format!("Can't play this song: {e}")))?;
-            let dec = crate::safe::SafeSource::new(dec);
+            let song = crate::safe::SafeSource::new(playable(rd)?);
             if self.duration <= 0.0 {
-                if let Some(d) = dec.total_duration() {
+                if let Some(d) = song.total_duration() {
                     self.duration = d.as_secs_f32();
                 }
             }
-            sink.append(dec);
+            sink.append(song);
             self.sink = Some(sink);
         }
         self.loaded = true;
@@ -107,25 +146,23 @@ impl Player {
                 TrackSource::Demo(spec) => sink.append(SynthSource::new(spec.clone())),
                 TrackSource::Online { cache, .. } => {
                     let f = File::open(cache).map_err(|_| "This song hasn't finished downloading.".to_string())?;
-                    let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(crate::safe::skip_tags(f))).map_err(|e| format!("Can't play this song: {e}")))?;
-                    let dec = crate::safe::SafeSource::new(dec);
+                    let song = crate::safe::SafeSource::new(playable(f)?);
                     if self.duration <= 0.0 {
-                        if let Some(d) = dec.total_duration() {
+                        if let Some(d) = song.total_duration() {
                             self.duration = d.as_secs_f32();
                         }
                     }
-                    sink.append(dec);
+                    sink.append(song);
                 }
                 TrackSource::File(path) => {
                     let f = File::open(path).map_err(|e| format!("Can't open file: {e}"))?;
-                    let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(crate::safe::skip_tags(f))).map_err(|e| format!("Can't play this file: {e}")))?;
-                    let dec = crate::safe::SafeSource::new(dec);
+                    let song = crate::safe::SafeSource::new(playable(f)?);
                     if self.duration <= 0.0 {
-                        if let Some(d) = dec.total_duration() {
+                        if let Some(d) = song.total_duration() {
                             self.duration = d.as_secs_f32();
                         }
                     }
-                    sink.append(dec);
+                    sink.append(song);
                 }
             }
             self.sink = Some(sink);

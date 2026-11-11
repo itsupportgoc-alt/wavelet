@@ -263,8 +263,10 @@ pub fn online_to_track(o: &crate::online::OnlineTrack, cache_dir: &Path) -> Trac
         hue: hue_of(&o.album),
         cover: if o.cover.is_empty() { None } else { Some(o.cover.clone()) },
         // A catalogue song only plays 30 seconds when the full-song helper is missing.
-        preview: o.is_preview() && !crate::online::full_songs_available(),
-        duration: if o.is_preview() && !crate::online::full_songs_available() { 30.0 } else { o.duration },
+        // A catalogue song is a real song: it plays its whole length, so no preview tag
+        // and no 30-second length.
+        preview: false,
+        duration: o.duration,
     }
 }
 

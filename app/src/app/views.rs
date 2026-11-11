@@ -722,13 +722,13 @@ impl WaveletApp {
             if on {
                 ui.label(RichText::new("Every song plays its whole length, like the original. Songs you pick from the charts are fetched in full, so they no longer stop after 30 seconds.").color(SUBTLE));
             } else if online::phone() {
-                ui.label(RichText::new("On the phone, chart songs play their whole length whenever an independent artist has a whole version, and a 30-second preview otherwise. The computer app can fetch every chart song in full.").color(SUBTLE));
+                ui.label(RichText::new("Every song plays its whole length on your phone too — the app fetches the real recording itself. Nothing to install.").color(SUBTLE));
             } else if online::full_songs_missing() == "ffmpeg" {
                 ui.label(RichText::new("The full-song helper is here, but ffmpeg is needed to turn songs into something the player can play. Install it, then come back.").color(SUBTLE));
                 ui.add_space(4.0);
                 ui.hyperlink_to("ffmpeg.org/download.html", online::FFMPEG_SITE);
             } else {
-                ui.label(RichText::new("Songs from the charts play a 30-second preview, because the catalogue that lists them only shares that much of each song. Turn this on and the app fetches the whole song instead.").color(SUBTLE));
+                ui.label(RichText::new("Songs from the charts play their whole length: the app fetches the original recording instead of the catalogue's 30-second sample. On the computer this uses a small helper program; on your phone it is built in.").color(SUBTLE));
                 ui.add_space(8.0);
                 let label = if self.full_tool_busy { "Getting full-length songs…" } else { "Turn on full-length songs" };
                 if pill_button(ui, label, 250.0, 36.0, ACCENT, BG).clicked() {

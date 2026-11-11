@@ -105,7 +105,6 @@ enum NetMsg {
 
     Cover(String, Result<egui::ColorImage, String>),
     FullTool(Result<(), String>),
-    FullVersion(String, Option<OnlineTrack>),
 }
 
 struct Mix {
@@ -205,13 +204,6 @@ pub struct WaveletApp {
     /// Turning on full-length songs: the helper download and its message.
     full_tool_busy: bool,
     full_tool_msg: Option<(String, bool)>,
-    /// Chart songs that have a whole version: chart id -> whole-song id.
-    redirect: HashMap<String, String>,
-    /// Chart songs whose whole version is being looked for right now.
-    full_pending: std::collections::HashSet<String>,
-    /// The song waiting for its lookup, so it starts as soon as the answer arrives.
-    full_wait: Option<String>,
-    full_lookup_since: Option<std::time::Instant>,
     keyboard_shown: bool,
     saw_text_input: bool,
     key_buf: String,
@@ -291,10 +283,6 @@ impl WaveletApp {
             streams: HashMap::new(),
             full_tool_busy: false,
             full_tool_msg: None,
-            redirect: HashMap::new(),
-            full_pending: std::collections::HashSet::new(),
-            full_wait: None,
-            full_lookup_since: None,
             keyboard_shown: false,
             saw_text_input: false,
             key_buf: String::new(),
@@ -371,9 +359,7 @@ impl WaveletApp {
     }
 
     fn track(&self, id: &str) -> Option<&Track> {
-        // A chart song whose whole version was found shows and plays that version instead.
-        let key = self.redirect.get(id).map(|s| s.as_str()).unwrap_or(id);
-        self.index.get(key).map(|&i| &self.tracks[i]).or_else(|| self.online_tracks.get(key))
+        self.index.get(id).map(|&i| &self.tracks[i]).or_else(|| self.online_tracks.get(id))
     }
 
     fn cache_dir(&self) -> PathBuf {
@@ -413,7 +399,7 @@ impl WaveletApp {
         self.streams.clear();
         self.downloading = None;
         self.add_online(&metas);
-        let chart_song = self.current.clone().map_or(false, |c| self.online_meta.get(&c).map_or(false, |o| o.is_preview()));
+        let chart_song = self.current.clone().map_or(false, |c| self.online_meta.get(&c).map_or(false, |o| o.is_catalogue()));
         self.show_toast("Full-length songs are on");
         if chart_song {
             if let Some(cur) = self.current.clone() {
@@ -518,10 +504,6 @@ impl WaveletApp {
         self.rebuild_index();
         self.online_tracks.clear();
         self.online_meta.clear();
-        self.redirect.clear();
-        self.full_pending.clear();
-        self.full_wait = None;
-        self.full_lookup_since = None;
         let saved = self.data.online.clone();
         self.add_online(&saved);
         self.key_buf = self.data.jamendo_key.clone();
@@ -564,110 +546,6 @@ impl WaveletApp {
     }
 
     // ---------------------------------------------------------------- playback
-
-    fn play_id(&mut self, id: &str) {
-        let Some(t) = self.track(id).cloned() else { return };
-        self.current = Some(t.id.clone());
-        if self.wait_for_whole_version(id) {
-            return;
-        }
-        let mut stream = None;
-        if let library::TrackSource::Online { url, cache } = &t.source {
-            if !cache.exists() {
-                // Start (or keep) the download; play as soon as the first part has arrived.
-                if self.streams.get(id).map_or(false, |st| st.failed().is_some()) {
-                    self.streams.remove(id); // try the download again
-                }
-                let st = self.stream_for(id, url, cache).clone();
-                if let Some(e) = st.failed() {
-                    self.streams.remove(id);
-                    self.downloading = None;
-                    self.player.stop();
-                    self.playing = false;
-                    self.show_toast(e);
-                    return;
-                }
-                if !st.ready() {
-                    if self.downloading.as_deref() != Some(id) {
-                        self.show_toast(format!("Loading \"{}\"…", t.title));
-                    }
-                    self.downloading = Some(id.to_string());
-                    self.player.stop();
-                    self.playing = false;
-                    return;
-                }
-                stream = Some(st);
-            }
-            self.downloading = None;
-            self.remember(id);
-        }
-        let loaded = match &stream {
-            Some(st) => self.player.load_stream(&t, st),
-            None => self.player.load(&t),
-        };
-        match loaded {
-            Ok(()) => {
-                self.player.play();
-                self.playing = true;
-                self.prefetch_next();
-                self.data.recent.retain(|r| r != &t.id);
-                self.data.recent.insert(0, t.id.clone());
-                self.data.recent.truncate(30);
-                self.save();
-            }
-            Err(e) => {
-                self.playing = false;
-                self.show_toast(e);
-            }
-        }
-    }
-
-    /// A chart song whose whole version is still being looked for: hold playback until the
-    /// answer arrives, so a 30-second preview never starts and is replaced a moment later.
-    fn wait_for_whole_version(&mut self, id: &str) -> bool {
-        if self.redirect.contains_key(id) || !self.full_pending.contains(id) {
-            return false;
-        }
-        if self.full_wait.as_deref() != Some(id) {
-            self.full_wait = Some(id.to_string());
-            self.full_lookup_since = Some(std::time::Instant::now());
-            self.show_toast("Finding the whole song…");
-            self.downloading = None;
-            self.player.stop();
-            self.playing = false;
-        }
-        true
-    }
-
-    /// Look for whole versions of the chart songs in a list right away, so the lists show
-    /// full-length songs and tapping one plays the whole thing instead of a 30-second preview.
-    fn prefetch_whole_versions(&mut self, ids: &[String]) {
-        if online::full_songs_available() {
-            return;
-        }
-        let todo: Vec<(String, String, String)> = ids
-            .iter()
-            .filter(|id| !self.redirect.contains_key(*id) && !self.full_pending.contains(*id))
-            .filter_map(|id| self.online_meta.get(id).filter(|o| o.is_preview()).map(|o| (id.clone(), o.title.clone(), o.artist.clone())))
-            .take(8)
-            .collect();
-        if todo.is_empty() {
-            return;
-        }
-        for (id, _, _) in &todo {
-            self.full_pending.insert(id.clone());
-        }
-        let tx = self.net_tx.clone();
-        std::thread::spawn(move || {
-            for (id, title, artist) in todo {
-                let found = crate::safe::catch(|| online::full_version(&title, &artist)).ok().flatten();
-                if tx.send(NetMsg::FullVersion(id, found)).is_err() {
-                    return;
-                }
-            }
-        });
-    }
-
     /// Download the next internet song in the list ahead of time, so songs follow each other without a wait.
     fn prefetch_next(&mut self) {
         let next = self.queue.front().cloned().or_else(|| self.context.get(self.ctx_pos + 1).cloned());
@@ -693,7 +571,7 @@ impl WaveletApp {
         });
         let dz = id.strip_prefix("dz:").map(|s| s.to_string());
         // Chart songs play in full when the helper is there.
-        let full = self.online_meta.get(id).filter(|o| o.is_preview()).map(|o| format!("{} {} official audio", o.title, o.artist));
+        let full = self.online_meta.get(id).filter(|o| o.is_catalogue()).map(|o| format!("{} {} official audio", o.title, o.artist));
         self.streams
             .entry(id.to_string())
             .or_insert_with(|| online::start_stream(url.to_string(), dz, full, cache.to_path_buf()))
@@ -750,6 +628,60 @@ impl WaveletApp {
         self.ctx_pos = np;
         let id = self.context[np].clone();
         self.play_id(&id);
+    }
+
+    fn play_id(&mut self, id: &str) {
+        let Some(t) = self.track(id).cloned() else { return };
+        self.current = Some(t.id.clone());
+        let mut stream = None;
+        if let library::TrackSource::Online { url, cache } = &t.source {
+            if !cache.exists() {
+                // Start (or keep) the download; play as soon as the first part has arrived.
+                if self.streams.get(id).map_or(false, |st| st.failed().is_some()) {
+                    self.streams.remove(id); // try the download again
+                }
+                let st = self.stream_for(id, url, cache).clone();
+                if let Some(e) = st.failed() {
+                    self.streams.remove(id);
+                    self.downloading = None;
+                    self.player.stop();
+                    self.playing = false;
+                    self.show_toast(e);
+                    return;
+                }
+                if !st.ready() {
+                    if self.downloading.as_deref() != Some(id) {
+                        self.show_toast(format!("Loading \"{}\"…", t.title));
+                    }
+                    self.downloading = Some(id.to_string());
+                    self.player.stop();
+                    self.playing = false;
+                    return;
+                }
+                stream = Some(st);
+            }
+            self.downloading = None;
+            self.remember(id);
+        }
+        let loaded = match &stream {
+            Some(st) => self.player.load_stream(&t, st),
+            None => self.player.load(&t),
+        };
+        match loaded {
+            Ok(()) => {
+                self.player.play();
+                self.playing = true;
+                self.prefetch_next();
+                self.data.recent.retain(|r| r != &t.id);
+                self.data.recent.insert(0, t.id.clone());
+                self.data.recent.truncate(30);
+                self.save();
+            }
+            Err(e) => {
+                self.playing = false;
+                self.show_toast(e);
+            }
+        }
     }
 
     fn prev(&mut self) {
@@ -1012,8 +944,6 @@ impl WaveletApp {
                         Ok(list) => {
                             self.cat_results = self.add_online(&list);
                             self.cat_err = None;
-                            let ids = self.cat_results.clone();
-                            self.prefetch_whole_versions(&ids);
                         }
                         Err(e) => {
                             self.cat_results.clear();
@@ -1028,8 +958,6 @@ impl WaveletApp {
                         Ok(list) => {
                             self.hits = self.add_online(&list);
                             self.hits_err = None;
-                            let ids = self.hits.clone();
-                            self.prefetch_whole_versions(&ids);
                         }
                         Err(e) => self.hits_err = Some(e),
                     }
@@ -1086,22 +1014,6 @@ impl WaveletApp {
                         Err(_) => {}
                     }
                 }
-                NetMsg::FullVersion(id, found) => {
-                    self.full_pending.remove(&id);
-                    if let Some(o) = found {
-                        let dir = self.cache_dir();
-                        let whole_id = o.track_id();
-                        self.online_tracks.insert(whole_id.clone(), library::online_to_track(&o, &dir));
-                        self.online_meta.insert(whole_id.clone(), o);
-                        // From now on that chart row is the whole song: real length, no preview tag.
-                        self.redirect.insert(id.clone(), whole_id);
-                    }
-                    if self.full_wait.as_deref() == Some(id.as_str()) {
-                        self.full_wait = None;
-                        self.full_lookup_since = None;
-                        self.play_id(&id);
-                    }
-                }
                 NetMsg::FullTool(res) => {
                     self.full_tool_busy = false;
                     match res {
@@ -1143,17 +1055,6 @@ impl WaveletApp {
             self.next(true);
         }
         // A song the listener picked is downloading: start it once enough has arrived.
-        // A whole-version lookup that never answered must not leave the song unplayed.
-        if let Some(t) = self.full_lookup_since {
-            if t.elapsed().as_secs_f64() > 20.0 {
-                self.full_lookup_since = None;
-                if let Some(id) = self.full_wait.take() {
-                    self.full_pending.remove(&id);
-                    self.show_toast("No whole version of this song — playing the 30-second preview.");
-                    self.play_id(&id);
-                }
-            }
-        }
         if let Some(id) = self.downloading.clone() {
             if self.current.as_deref() != Some(id.as_str()) {
                 self.downloading = None;
@@ -1175,7 +1076,7 @@ impl WaveletApp {
             self.keyboard_shown = wants;
             show_keyboard(wants);
         }
-        if self.playing || self.scan_rx.is_some() || self.full_wait.is_some() {
+        if self.playing || self.scan_rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         // Real music: search as you type (after a short pause) and load "popular" for Home.

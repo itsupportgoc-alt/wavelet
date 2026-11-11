@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod app;
 pub mod library;
+pub mod m4a;
 pub mod online;
 pub mod player;
 pub mod safe;
@@ -12,4 +13,4 @@ pub mod theme;
 pub use app::{set_data_dir, set_keyboard_hook, CrashReport, WaveletApp};
 
 /// Shown in the app's profile page, so it is obvious which build is installed.
-pub const VERSION: &str = "0.6.2";
+pub const VERSION: &str = "0.7.0";
