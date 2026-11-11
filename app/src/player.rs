@@ -79,7 +79,8 @@ impl Player {
             sink.pause();
             sink.set_volume(self.volume * self.volume);
             let rd = crate::online::StreamState::reader(st)?;
-            let dec = Decoder::new(BufReader::new(rd)).map_err(|e| format!("Can't play this song: {e}"))?;
+            let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(rd)).map_err(|e| format!("Can't play this song: {e}")))?;
+            let dec = crate::safe::SafeSource::new(dec);
             if self.duration <= 0.0 {
                 if let Some(d) = dec.total_duration() {
                     self.duration = d.as_secs_f32();
@@ -106,7 +107,8 @@ impl Player {
                 TrackSource::Demo(spec) => sink.append(SynthSource::new(spec.clone())),
                 TrackSource::Online { cache, .. } => {
                     let f = File::open(cache).map_err(|_| "This song hasn't finished downloading.".to_string())?;
-                    let dec = Decoder::new(BufReader::new(f)).map_err(|e| format!("Can't play this song: {e}"))?;
+                    let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(f)).map_err(|e| format!("Can't play this song: {e}")))?;
+                    let dec = crate::safe::SafeSource::new(dec);
                     if self.duration <= 0.0 {
                         if let Some(d) = dec.total_duration() {
                             self.duration = d.as_secs_f32();
@@ -116,7 +118,8 @@ impl Player {
                 }
                 TrackSource::File(path) => {
                     let f = File::open(path).map_err(|e| format!("Can't open file: {e}"))?;
-                    let dec = Decoder::new(BufReader::new(f)).map_err(|e| format!("Can't play this file: {e}"))?;
+                    let dec = crate::safe::catch_res(|| Decoder::new(BufReader::new(f)).map_err(|e| format!("Can't play this file: {e}")))?;
+                    let dec = crate::safe::SafeSource::new(dec);
                     if self.duration <= 0.0 {
                         if let Some(d) = dec.total_duration() {
                             self.duration = d.as_secs_f32();

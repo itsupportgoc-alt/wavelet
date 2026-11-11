@@ -4,6 +4,14 @@ use eframe::egui;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {
+    // Problems Wavelet already handles (a damaged song or cover picture) stay quiet.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !wavelet::safe::guarded() {
+            default_hook(info);
+        }
+    }));
+
     let args: Vec<String> = std::env::args().collect();
     let mut screenshot: Option<PathBuf> = None;
     let mut i = 1;

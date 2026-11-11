@@ -394,7 +394,18 @@ pub fn start_stream(url: String, dz_id: Option<String>, cache: PathBuf) -> Arc<S
         }
     };
     let st2 = st.clone();
+    let st3 = st.clone();
     std::thread::spawn(move || {
+        // A damaged download must never close the app.
+        if let Err(e) = crate::safe::catch(move || download_into(file, url, dz_id, cache, part, st2)) {
+            stream_fail(&st3, format!("This song couldn't be downloaded ({e})."));
+        }
+    });
+    st
+}
+
+fn download_into(file: File, url: String, dz_id: Option<String>, cache: PathBuf, part: PathBuf, st2: Arc<StreamState>) {
+    {
         let mut file = file;
         let url = match dz_id {
             Some(id) => fresh_preview(&id).unwrap_or(url),
@@ -440,8 +451,7 @@ pub fn start_stream(url: String, dz_id: Option<String>, cache: PathBuf) -> Arc<S
             let _ = std::fs::remove_file(&tmp);
         }
         st2.done.store(true, Ordering::SeqCst);
-    });
-    st
+    }
 }
 
 /// Reads a song file that may still be downloading: waits for bytes that haven't arrived yet.

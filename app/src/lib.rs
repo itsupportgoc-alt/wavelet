@@ -5,6 +5,7 @@ pub mod app;
 pub mod library;
 pub mod online;
 pub mod player;
+pub mod safe;
 pub mod synth;
 pub mod theme;
 

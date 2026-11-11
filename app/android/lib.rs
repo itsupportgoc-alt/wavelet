@@ -37,6 +37,12 @@ fn android_main(app: AndroidApp) {
     }
     let cf = crash_file.clone();
     std::panic::set_hook(Box::new(move |info| {
+        // Problems that Wavelet already handled (a damaged song or cover picture) are only logged:
+        // the app keeps running, so there is no crash to report.
+        if wavelet::safe::guarded() {
+            log(&format!("Wavelet handled a problem: {info}"));
+            return;
+        }
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
         let msg = format!("Wavelet {} (thread {thread}): {info}", env!("CARGO_PKG_VERSION"));
         log(&msg);

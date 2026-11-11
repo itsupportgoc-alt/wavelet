@@ -405,7 +405,10 @@ impl WaveletApp {
     fn spawn_net(&self, f: impl FnOnce() -> NetMsg + Send + 'static) {
         let tx = self.net_tx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(f());
+            // A damaged reply must never close the app (the result is simply dropped).
+            if let Ok(msg) = crate::safe::catch(f) {
+                let _ = tx.send(msg);
+            }
         });
     }
 
@@ -419,9 +422,18 @@ impl WaveletApp {
                     self.covers.insert(url.clone(), None);
                     let u = url.clone();
                     self.spawn_net(move || {
-                        let r = online::http_get(&u).and_then(|b| image::load_from_memory(&b).map_err(|e| e.to_string())).map(|img| {
-                            let rgba = img.to_rgba8();
-                            egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw())
+                        // Some cover pictures are damaged; reading them must not close the app.
+                        let r = online::http_get(&u).and_then(|b| {
+                            crate::safe::catch_res(|| {
+                                let img = image::load_from_memory(&b).map_err(|e| e.to_string())?;
+                                // Covers are shown small: shrink big pictures (saves memory, phones limit picture size).
+                                let img = if img.width() > 300 || img.height() > 300 { img.thumbnail(300, 300) } else { img };
+                                let rgba = img.to_rgba8();
+                                if rgba.width() == 0 || rgba.height() == 0 {
+                                    return Err("empty picture".to_string());
+                                }
+                                Ok(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
+                            })
                         });
                         NetMsg::Cover(u, r)
                     });
@@ -718,10 +730,23 @@ impl WaveletApp {
         }
     }
 
+    /// Draw the current page; if something in it can't be shown, say so instead of closing the app.
+    fn view_content_safe(&mut self, ui: &mut Ui) {
+        if let Err(e) = crate::safe::catch(|| self.view_content(ui)) {
+            ui.add_space(40.0);
+            ui.label(RichText::new("Part of this page couldn't be shown").font(bold(20.0)));
+            ui.label(RichText::new(format!("Details: {e}")).color(SUBTLE));
+            ui.add_space(8.0);
+            if ui.button("Go back").clicked() {
+                self.pending.push(Action::Back);
+            }
+        }
+    }
+
     fn spawn_scan(&mut self, dir: PathBuf) {
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let r = library::scan_folder(&dir);
+            let r = crate::safe::catch(|| library::scan_folder(&dir)).unwrap_or_default();
             let _ = tx.send((dir, r));
         });
         self.scan_rx = Some(rx);
@@ -858,7 +883,7 @@ impl WaveletApp {
                     self.key_testing = true;
                     self.key_msg = None;
                     self.spawn_net(move || {
-                        let r = online::popular(&key, 1);
+                        let r = crate::safe::catch_res(|| online::popular(&key, 1));
                         NetMsg::KeyTest(key, r)
                     });
                 }
@@ -1062,7 +1087,7 @@ impl WaveletApp {
                 self.cat_since = now;
                 let q1 = q.clone();
                 self.spawn_net(move || {
-                    let r = online::catalog_search(&q1, 25);
+                    let r = crate::safe::catch_res(|| online::catalog_search(&q1, 25));
                     NetMsg::Catalog(q1, r)
                 });
             }
@@ -1072,19 +1097,19 @@ impl WaveletApp {
                 self.full_since = now;
                 let q2 = q.clone();
                 self.spawn_net(move || {
-                    let r = online::full_search(&q2, 20);
+                    let r = crate::safe::catch_res(|| online::full_search(&q2, 20));
                     NetMsg::FullSearch(q2, r)
                 });
             }
             if self.trend_state == 0 && self.view == View::Home {
                 self.trend_state = 1;
                 self.trend_since = now;
-                self.spawn_net(|| NetMsg::Trending(online::trending_full(30)));
+                self.spawn_net(|| NetMsg::Trending(crate::safe::catch_res(|| online::trending_full(30))));
             }
             if self.hits_state == 0 && self.view == View::Home {
                 self.hits_state = 1;
                 self.hits_since = now;
-                self.spawn_net(|| NetMsg::Hits(online::top_hits(20)));
+                self.spawn_net(|| NetMsg::Hits(crate::safe::catch_res(|| online::top_hits(20))));
             }
             // A blocked or very slow connection must never leave a section spinning forever.
             const GIVE_UP: f64 = 20.0;
@@ -1120,14 +1145,14 @@ impl WaveletApp {
                 self.online_busy = true;
                 let key = self.data.jamendo_key.clone();
                 self.spawn_net(move || {
-                    let r = online::search(&key, &q, 30);
+                    let r = crate::safe::catch_res(|| online::search(&key, &q, 30));
                     NetMsg::Search(q, r)
                 });
             }
             if self.popular_state == 0 && self.view == View::Home {
                 self.popular_state = 1;
                 let key = self.data.jamendo_key.clone();
-                self.spawn_net(move || NetMsg::Popular(online::popular(&key, 12)));
+                self.spawn_net(move || NetMsg::Popular(crate::safe::catch_res(|| online::popular(&key, 12))));
             }
         }
         if self.online_busy || self.popular_state == 1 || self.downloading.is_some() || self.key_testing || (self.view == View::Search && self.search.trim() != self.online_sent) {
@@ -1223,7 +1248,7 @@ impl WaveletApp {
                     ScrollArea::vertical().id_salt(key).auto_shrink([false, false]).show(ui, |ui| {
                         Frame::new().inner_margin(Margin { left: 24, right: 24, top: 0, bottom: 32 }).show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            self.view_content(ui);
+                            self.view_content_safe(ui);
                         });
                     });
                 });
@@ -1261,7 +1286,7 @@ impl WaveletApp {
                     ScrollArea::vertical().id_salt(key).auto_shrink([false, false]).show(ui, |ui| {
                         Frame::new().inner_margin(Margin { left: 14, right: 14, top: 0, bottom: 24 }).show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            self.view_content(ui);
+                            self.view_content_safe(ui);
                         });
                     });
                 });
