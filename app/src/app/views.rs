@@ -42,6 +42,7 @@ impl WaveletApp {
             }
             View::Local => self.local_view(ui),
             View::Queue => self.queue_view(ui),
+            View::Lyrics => self.lyrics_view(ui),
             View::Account => self.account_view(ui),
         }
     }
@@ -836,6 +837,64 @@ impl WaveletApp {
         }
     }
 
+    /// The words of the song playing, scrolling along when the service has timed them.
+    fn lyrics_view(&mut self, ui: &mut Ui) {
+        ui.add_space(4.0);
+        ui.label(RichText::new("Lyrics").font(bold(30.0)));
+        ui.add_space(6.0);
+        let Some(t) = self.current.clone().and_then(|id| self.track(&id).cloned()) else {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Play a song and its words show up here.").color(SUBTLE));
+            return;
+        };
+        ui.label(RichText::new(&t.title).font(bold(18.0)));
+        ui.label(RichText::new(&t.artist).color(SUBTLE));
+        ui.add_space(16.0);
+        match self.lyrics_state {
+            2 => self.lyrics_lines(ui),
+            3 => {
+                let msg = self.lyrics_err.clone().unwrap_or_else(|| "The words for this song aren't available.".into());
+                ui.label(RichText::new(msg).color(Color32::from_rgb(255, 110, 110)));
+                ui.add_space(10.0);
+                if pill_button(ui, "Look again", 150.0, 38.0, ACCENT, BG).clicked() {
+                    self.load_lyrics(&t, true);
+                }
+            }
+            _ => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("Looking for the words…").color(SUBTLE));
+                });
+            }
+        }
+    }
+
+    fn lyrics_lines(&mut self, ui: &mut Ui) {
+        let Some(l) = self.lyrics.clone() else { return };
+        // Follow a timed song; plain words stay still.
+        let cur = l.index_at(self.player.position());
+        let mut at = self.lyrics_line;
+        let mut follow = None;
+        for (i, (_, text)) in l.lines.iter().enumerate() {
+            let now = cur == Some(i);
+            let col = if now || !l.timed { TEXT } else { SUBTLE };
+            let rt = RichText::new(text).font(if now { bold(21.0) } else { reg(17.0) }).color(col);
+            let r = ui.add(egui::Label::new(rt).wrap());
+            ui.add_space(if now { 9.0 } else { 4.0 });
+            if now && at != i {
+                at = i;
+                follow = Some(r.rect);
+            }
+        }
+        if let Some(rect) = follow {
+            // The page itself scrolls, so this walks down with the song.
+            ui.scroll_to_rect(rect.expand2(vec2(0.0, 150.0)), Some(egui::Align::Center));
+        }
+        self.lyrics_line = at;
+        ui.add_space(12.0);
+        ui.label(RichText::new(format!("Words from {}", crate::lyrics::SERVICE)).size(11.5).color(FAINT));
+    }
+
     fn queue_view(&mut self, ui: &mut Ui) {
         ui.add_space(4.0);
         ui.label(RichText::new("Queue").font(bold(30.0)));
@@ -846,6 +905,14 @@ impl WaveletApp {
         };
         if ui.available_width() < 560.0 {
             self.now_playing_card(ui);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let label = if self.view == View::Lyrics { "Hide the words" } else { "Show the words" };
+                if pill_button(ui, label, 170.0, 38.0, CARD_HOVER, TEXT).clicked() {
+                    self.pending.push(if self.view == View::Lyrics { Action::Back } else { Action::Go(View::Lyrics) });
+                }
+            });
+            ui.add_space(12.0);
         } else {
             ui.label(RichText::new("Now playing").font(bold(17.0)).color(SUBTLE));
             self.track_table(ui, &[cur], TableKind::Plain, true);

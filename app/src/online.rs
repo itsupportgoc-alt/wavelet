@@ -651,7 +651,7 @@ fn finish_whole_song(part: &Path, cache: &Path, st2: &Arc<StreamState>, size: u6
 
 /// A web address asked for with a particular browser name.
 #[cfg(not(target_os = "android"))]
-fn http_get_with_ua(url: &str, ua: &str) -> Result<Vec<u8>, String> {
+pub fn http_get_with_ua(url: &str, ua: &str) -> Result<Vec<u8>, String> {
     let mut cmd = std::process::Command::new("curl");
     cmd.args(["-sSL", "--fail", "--compressed", "--connect-timeout", "8", "--max-time", "25", "-A", ua, url]);
     #[cfg(windows)]
@@ -667,7 +667,7 @@ fn http_get_with_ua(url: &str, ua: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "android")]
-fn http_get_with_ua(url: &str, ua: &str) -> Result<Vec<u8>, String> {
+pub fn http_get_with_ua(url: &str, ua: &str) -> Result<Vec<u8>, String> {
     let resp = agent().get(url).set("User-Agent", ua).timeout(std::time::Duration::from_secs(25)).call().map_err(friendly)?;
     let mut buf = Vec::new();
     resp.into_reader().read_to_end(&mut buf).map_err(|_| OFFLINE_MSG.to_string())?;

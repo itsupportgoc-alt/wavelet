@@ -8,6 +8,7 @@ use crate::theme::*;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Context, Frame, Id, Key, Margin, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, UiBuilder};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use crate::lyrics::Lyrics;
 use crate::online::{self, OnlineTrack};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use widgets::*;
@@ -62,6 +63,7 @@ pub enum View {
     Mix(usize),
     Local,
     Queue,
+    Lyrics,
     Account,
 }
 
@@ -102,6 +104,7 @@ enum NetMsg {
     Downloaded(String, Result<(), String>),
     Catalog(String, Result<Vec<OnlineTrack>, String>),
     Hits(Result<Vec<OnlineTrack>, String>),
+    Lyrics(String, Result<Lyrics, String>),
 
     Cover(String, Result<egui::ColorImage, String>),
     FullTool(Result<(), String>),
@@ -221,6 +224,14 @@ pub struct WaveletApp {
     cat_since: f64,
     hits_since: f64,
 
+    /// The words of the song playing: which song they were asked for, how that went, and the
+    /// line the page last scrolled to (so it only moves on when the singing does).
+    lyrics_id: String,
+    lyrics_state: u8,
+    lyrics: Option<Lyrics>,
+    lyrics_err: Option<String>,
+    lyrics_line: usize,
+
     screenshot: Option<PathBuf>,
     frames: u32,
     shot_requested: bool,
@@ -298,6 +309,11 @@ impl WaveletApp {
             hits_err: None,
             cat_since: 0.0,
             hits_since: 0.0,
+            lyrics_id: String::new(),
+            lyrics_state: 0,
+            lyrics: None,
+            lyrics_err: None,
+            lyrics_line: usize::MAX,
             screenshot,
             frames: 0,
             shot_requested: false,
@@ -427,6 +443,22 @@ impl WaveletApp {
         });
     }
 
+    /// Ask for the words of the song now playing (LRCLIB, once per song).
+    fn load_lyrics(&mut self, t: &Track, again: bool) {
+        let key = format!("{}|{}", t.artist, t.title);
+        // Already asked for this song? Then leave the result alone unless told to retry.
+        if !again && key == self.lyrics_id && self.lyrics_state != 0 {
+            return;
+        }
+        self.lyrics_id = key.clone();
+        self.lyrics = None;
+        self.lyrics_err = None;
+        self.lyrics_state = 1;
+        self.lyrics_line = usize::MAX;
+        let (artist, title, duration) = (t.artist.clone(), t.title.clone(), t.duration);
+        self.spawn_net(move || NetMsg::Lyrics(key, crate::safe::catch_res(|| crate::lyrics::fetch(&artist, &title, duration))));
+    }
+
     /// Cover picture for a song: real cover art when it has one (downloaded in the background).
     fn art_for(&mut self, t: &Track) -> Art {
         if let Some(url) = &t.cover {
@@ -541,6 +573,7 @@ impl WaveletApp {
             "library" => self.view = View::Library,
             "account" => self.view = View::Account,
             "queue" => self.view = View::Queue,
+            "lyrics" => self.view = View::Lyrics,
             _ => {}
         }
     }
@@ -671,6 +704,7 @@ impl WaveletApp {
             Ok(()) => {
                 self.player.play();
                 self.playing = true;
+                self.load_lyrics(&t, false);
                 self.prefetch_next();
                 self.data.recent.retain(|r| r != &t.id);
                 self.data.recent.insert(0, t.id.clone());
@@ -960,6 +994,25 @@ impl WaveletApp {
                             self.hits_err = None;
                         }
                         Err(e) => self.hits_err = Some(e),
+                    }
+                }
+                NetMsg::Lyrics(id, res) => {
+                    // A newer song may already have replaced these words.
+                    if id != self.lyrics_id {
+                        continue;
+                    }
+                    match res {
+                        Ok(l) => {
+                            self.lyrics = Some(l);
+                            self.lyrics_state = 2;
+                            self.lyrics_err = None;
+                            self.lyrics_line = usize::MAX;
+                        }
+                        Err(e) => {
+                            self.lyrics = None;
+                            self.lyrics_state = 3;
+                            self.lyrics_err = Some(e);
+                        }
                     }
                 }
                 NetMsg::Search(q, res) => {
@@ -1446,6 +1499,7 @@ impl WaveletApp {
             View::Mix(i) => (self.mixes.get(*i).map(|m| m.hue).unwrap_or(0.0), 0.6),
             View::Local => (0.48, 0.55),
             View::Queue => (0.0, 0.0),
+            View::Lyrics => (0.72, 0.35),
             View::Account => (0.05, 0.5),
         }
     }
@@ -1728,6 +1782,12 @@ impl WaveletApp {
         queue(&p, qc, 18.0, if self.view == View::Queue { ACCENT } else if qr.hovered() { TEXT } else { SUBTLE });
         if qr.clicked() {
             self.pending.push(if self.view == View::Queue { Action::Back } else { Action::Go(View::Queue) });
+        }
+        let lc = pos2(r.right() - 244.0, r.center().y);
+        let lt = ui.interact(Rect::from_center_size(lc, vec2(60.0, 32.0)), Id::new("pb_lyrics"), Sense::click()).on_hover_text("Lyrics");
+        p.text(lc, Align2::CENTER_CENTER, "Lyrics", bold(13.0), if self.view == View::Lyrics { ACCENT } else if lt.hovered() { TEXT } else { SUBTLE });
+        if lt.clicked() {
+            self.pending.push(if self.view == View::Lyrics { Action::Back } else { Action::Go(View::Lyrics) });
         }
         let vc = pos2(r.right() - 156.0, r.center().y);
         let vr = btn(ui, vc, "pb_mute", "Mute");
