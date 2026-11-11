@@ -259,7 +259,7 @@ pub fn chart_note() -> String {
     if full_songs_available() {
         "· full songs · right-click a song for more options".into()
     } else if phone() {
-        "· whole versions are added as each song is found · 30-second preview otherwise".into()
+        "· real songs · 30-second previews on a phone".into()
     } else {
         "· 30-second previews · turn on full-length songs in your Profile".into()
     }
@@ -426,11 +426,11 @@ fn pick_full_version(list: Vec<OnlineTrack>, title: &str, artist: &str) -> Optio
         }
         // Every word of the song's name should be there; extra words ("cover", "remix") cost a little.
         let mut score = hits as i32 * 10 - (have.len().saturating_sub(want.len()) as i32) * 2;
-        if !by.is_empty() {
-            let theirs = words(&t.artist);
-            if theirs.iter().any(|w| by.contains(w)) {
-                score += 25;
-            }
+        // Only the song's own artist counts here: anything else is a cover or a remix, and a
+        // different recording must never be presented as the song.
+        let theirs = words(&t.artist);
+        if by.is_empty() || !theirs.iter().any(|w| by.contains(w)) {
+            continue;
         }
         if t.duration >= 120.0 {
             score += 5;
@@ -1040,22 +1040,26 @@ mod tests {
         // Nothing that resembles the song: no swap, the preview stays.
         let list = vec![t("x", "Completely Different", "Nobody", 200.0)];
         assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
+        // Someone else's copy of the song (cover, remix, re-upload) is not the song.
+        let list = vec![t("a", "Blinding Lights", "MRecord", 155.0)];
+        assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
         // A clip is never used instead of the whole song.
         let list = vec![t("y", "Blinding Lights", "The Weeknd", 30.0)];
         assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
     }
 
-    /// Real network: a chart song finds a whole version without any helper program.
+    /// Real network: a song that an artist published whole is found, nobody else's is used.
     #[test]
     #[ignore]
     fn live_full_version_lookup() {
-        let song = catalog_search("blinding lights the weeknd", 1).expect("search works")[0].clone();
-        let full = full_version(&song.title, &song.artist).expect("a whole version exists");
-        println!("{} -> {} by {} ({:.0}s)", song.title, full.title, full.artist, full.duration);
-        assert!(full.duration > 90.0);
-        let p = std::env::temp_dir().join("wavelet-full-version.mp3");
-        download(&full.audio, &p).unwrap();
-        assert!(std::fs::metadata(&p).unwrap().len() > 500_000);
+        let known = trending_full(8).unwrap();
+        let first = known.into_iter().find(|t| t.duration > 90.0).expect("trending songs");
+        let found = full_version(&first.title, &first.artist).expect("the artist's own whole song");
+        println!("{} by {} -> {} ({:.0}s)", first.title, first.artist, found.title, found.duration);
+        assert!(found.duration > 60.0);
+        assert!(words(&found.artist).iter().any(|w| words(&first.artist).contains(w)));
+        // Made-up songs are never claimed.
+        assert!(full_version("Qzxv Not A Song", "Qzxv Nobody").is_none());
     }
 
     /// Real network: how many of today's chart songs have a whole version (what a phone can play).

@@ -102,8 +102,7 @@ enum NetMsg {
     Downloaded(String, Result<(), String>),
     Catalog(String, Result<Vec<OnlineTrack>, String>),
     Hits(Result<Vec<OnlineTrack>, String>),
-    Trending(Result<Vec<OnlineTrack>, String>),
-    FullSearch(String, Result<Vec<OnlineTrack>, String>),
+
     Cover(String, Result<egui::ColorImage, String>),
     FullTool(Result<(), String>),
     FullVersion(String, Option<OnlineTrack>),
@@ -226,17 +225,8 @@ pub struct WaveletApp {
     hits: Vec<String>,
     hits_state: u8,
     hits_err: Option<String>,
-    trend: Vec<String>,
-    trend_state: u8,
-    trend_err: Option<String>,
-    full_results: Vec<String>,
-    full_sent: String,
-    full_busy: bool,
-    full_err: Option<String>,
     /// When each online request started, so a hung one can't leave the screen spinning forever.
     cat_since: f64,
-    full_since: f64,
-    trend_since: f64,
     hits_since: f64,
 
     screenshot: Option<PathBuf>,
@@ -318,16 +308,7 @@ impl WaveletApp {
             hits: vec![],
             hits_state: 0,
             hits_err: None,
-            trend: vec![],
-            trend_state: 0,
-            trend_err: None,
-            full_results: vec![],
-            full_sent: String::new(),
-            full_busy: false,
-            full_err: None,
             cat_since: 0.0,
-            full_since: 0.0,
-            trend_since: 0.0,
             hits_since: 0.0,
             screenshot,
             frames: 0,
@@ -1040,34 +1021,6 @@ impl WaveletApp {
                         }
                     }
                 }
-                NetMsg::Trending(res) => {
-                    self.trend_state = 2;
-                    self.trend_since = 0.0;
-                    match res {
-                        Ok(list) => {
-                            self.trend = self.add_online(&list);
-                            self.trend_err = None;
-                        }
-                        Err(e) => self.trend_err = Some(e),
-                    }
-                }
-                NetMsg::FullSearch(q, res) => {
-                    if q != self.full_sent {
-                        continue;
-                    }
-                    self.full_busy = false;
-                    self.full_since = 0.0;
-                    match res {
-                        Ok(list) => {
-                            self.full_results = self.add_online(&list);
-                            self.full_err = None;
-                        }
-                        Err(e) => {
-                            self.full_results.clear();
-                            self.full_err = Some(e);
-                        }
-                    }
-                }
                 NetMsg::Hits(res) => {
                     self.hits_state = 2;
                     self.hits_since = 0.0;
@@ -1244,21 +1197,6 @@ impl WaveletApp {
                     NetMsg::Catalog(q1, r)
                 });
             }
-            if self.view == View::Search && !q.is_empty() && q != self.full_sent && now - self.search_changed > 0.5 {
-                self.full_sent = q.clone();
-                self.full_busy = true;
-                self.full_since = now;
-                let q2 = q.clone();
-                self.spawn_net(move || {
-                    let r = crate::safe::catch_res(|| online::full_search(&q2, 20));
-                    NetMsg::FullSearch(q2, r)
-                });
-            }
-            if self.trend_state == 0 && self.view == View::Home {
-                self.trend_state = 1;
-                self.trend_since = now;
-                self.spawn_net(|| NetMsg::Trending(crate::safe::catch_res(|| online::trending_full(30))));
-            }
             if self.hits_state == 0 && self.view == View::Home {
                 self.hits_state = 1;
                 self.hits_since = now;
@@ -1272,22 +1210,12 @@ impl WaveletApp {
                 self.cat_err = Some(online::OFFLINE_MSG.into());
                 self.cat_since = 0.0;
             }
-            if stuck(self.full_since) {
-                self.full_busy = false;
-                self.full_err = Some(online::OFFLINE_MSG.into());
-                self.full_since = 0.0;
-            }
-            if stuck(self.trend_since) {
-                self.trend_state = 2;
-                self.trend_err = Some(online::OFFLINE_MSG.into());
-                self.trend_since = 0.0;
-            }
             if stuck(self.hits_since) {
                 self.hits_state = 2;
                 self.hits_err = Some(online::OFFLINE_MSG.into());
                 self.hits_since = 0.0;
             }
-            if self.cat_busy || self.full_busy || self.hits_state == 1 || self.trend_state == 1 || self.covers.values().any(|c| c.is_none()) {
+            if self.cat_busy || self.hits_state == 1 || self.covers.values().any(|c| c.is_none()) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
         }
@@ -1329,7 +1257,7 @@ impl WaveletApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         // Give online songs and cover pictures a moment to arrive (but never wait forever).
-        let net_busy = self.hits_state == 1 || self.trend_state == 1 || self.cat_busy || self.full_busy || (self.view == View::Search && !self.search.trim().is_empty() && self.search.trim() != self.cat_sent) || self.covers.values().any(|c| c.is_none());
+        let net_busy = self.hits_state == 1 || self.cat_busy || (self.view == View::Search && !self.search.trim().is_empty() && self.search.trim() != self.cat_sent) || self.covers.values().any(|c| c.is_none());
         let waited = ctx.input(|i| i.time);
         if self.frames >= 120 && (!net_busy || waited > 12.0) && !self.shot_requested && visible {
             self.shot_requested = true;
@@ -2075,35 +2003,25 @@ mod tests {
         false
     }
 
-    /// Real network: trending full songs play one after another; chart previews play too.
+    /// Real network: the chart songs load and play one after another.
     #[test]
     #[ignore]
-    fn trending_list_plays_through() {
+    fn chart_list_plays_through() {
         let ctx = Context::default();
         let mut app = WaveletApp::new(Some(std::env::temp_dir().join("wavelet-test.png")));
-        app.trend_state = 1;
-        app.spawn_net(|| NetMsg::Trending(online::trending_full(6)));
-        assert!(wait(&mut app, &ctx, 30, |a| a.trend_state == 2), "trending list loads");
-        let trend = app.trend.clone();
-        assert!(trend.len() >= 3, "{:?}", app.trend_err);
-
-        app.start(trend.clone(), 1);
-        assert!(wait(&mut app, &ctx, 90, |a| a.playing), "first trending song starts");
-        assert_eq!(app.current.as_deref(), Some(trend[1].as_str()));
-        let d = app.player.duration();
-        println!("playing {} ({d:.0}s)", app.track(&trend[1]).unwrap().title);
-        assert!(d > 60.0, "full-length song");
-
-        app.next(true); // song ended
-        assert!(wait(&mut app, &ctx, 90, |a| a.playing), "next song follows");
-        assert_eq!(app.current.as_deref(), Some(trend[2].as_str()));
-
         app.hits_state = 1;
-        app.spawn_net(|| NetMsg::Hits(online::top_hits(3)));
-        assert!(wait(&mut app, &ctx, 30, |a| a.hits_state == 2));
+        app.spawn_net(|| NetMsg::Hits(online::top_hits(6)));
+        assert!(wait(&mut app, &ctx, 40, |a| a.hits_state == 2), "the charts load");
         let hits = app.hits.clone();
-        app.start(hits.clone(), 0);
-        assert!(wait(&mut app, &ctx, 60, |a| a.playing), "chart preview plays");
-        println!("then {} (preview)", app.track(&hits[0]).unwrap().title);
+        assert!(hits.len() >= 3, "{:?}", app.hits_err);
+
+        app.start(hits.clone(), 1);
+        assert!(wait(&mut app, &ctx, 120, |a| a.playing), "a chart song starts");
+        assert_eq!(app.current.as_deref(), Some(hits[1].as_str()));
+        println!("playing {} ({:.0}s)", app.track(&hits[1]).unwrap().title, app.player.duration());
+
+        app.next(true);
+        assert!(wait(&mut app, &ctx, 120, |a| a.playing), "the next song follows");
+        assert_eq!(app.current.as_deref(), Some(hits[2].as_str()));
     }
 }

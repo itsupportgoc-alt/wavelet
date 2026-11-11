@@ -83,7 +83,6 @@ impl WaveletApp {
         }
 
         ui.add_space(20.0);
-        self.home_trending(ui);
         self.home_hits(ui);
         self.home_real_music(ui);
         let mixes: Vec<CardItem> = self
@@ -528,7 +527,6 @@ impl WaveletApp {
             .map(|(i, p)| CardItem { title: p.name.clone(), subtitle: format!("{} songs", p.tracks.len()), art: Art::Cover(p.hue, p.name.clone()), view: View::Playlist(i) })
             .collect();
         let has_key = self.has_key();
-        self.full_songs_section(ui);
         self.catalog_section(ui);
         if has_key {
             self.online_results_section(ui);
@@ -622,52 +620,6 @@ impl WaveletApp {
                 }
             }
         });
-    }
-
-    fn full_songs_section(&mut self, ui: &mut Ui) {
-        let ids = if self.full_busy { vec![] } else { self.full_results.clone() };
-        ui.add_space(4.0);
-        self.section_title(ui, "Full songs", "· complete tracks from Audius", &ids);
-        ui.add_space(4.0);
-        let q = self.search.trim().to_string();
-        if self.full_busy || q != self.full_sent {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(RichText::new("Searching full songs…").color(SUBTLE));
-            });
-        } else if let Some(e) = self.full_err.clone() {
-            ui.label(RichText::new(e).color(Color32::from_rgb(255, 110, 110)));
-            if ui.small_button("Try again").clicked() {
-                self.full_sent.clear();
-            }
-        } else if ids.is_empty() {
-            ui.label(RichText::new(format!("No full songs found for \"{q}\". Chart songs are below.")).color(SUBTLE));
-        } else {
-            let shown: Vec<String> = ids.into_iter().take(10).collect();
-            self.track_table(ui, &shown, TableKind::Plain, true);
-        }
-        ui.add_space(20.0);
-    }
-
-    fn home_trending(&mut self, ui: &mut Ui) {
-        let ids: Vec<String> = self.trend.clone();
-        self.section_title(ui, "Trending now", "· full songs from Audius", &ids);
-        ui.add_space(4.0);
-        if self.trend_state < 2 {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(RichText::new("Loading trending songs…").color(SUBTLE));
-            });
-        } else if let Some(e) = self.trend_err.clone() {
-            ui.label(RichText::new(e).color(Color32::from_rgb(255, 110, 110)));
-            if ui.small_button("Try again").clicked() {
-                self.trend_state = 0;
-            }
-        } else {
-            let shown: Vec<String> = ids.iter().take(10).cloned().collect();
-            self.track_table_in(ui, &shown, &ids);
-        }
-        ui.add_space(24.0);
     }
 
     fn home_hits(&mut self, ui: &mut Ui) {
