@@ -1987,4 +1987,25 @@ mod tests {
         assert!(wait(&mut app, &ctx, 120, |a| a.playing), "the next song follows");
         assert_eq!(app.current.as_deref(), Some(hits[2].as_str()));
     }
+
+    /// The lyrics page draws, and walks down the words as the song plays.
+    #[test]
+    fn lyrics_page_follows_the_song() {
+        let ctx = Context::default();
+        // The page is drawn with the app's own fonts, which the theme installs.
+        crate::theme::setup(&ctx);
+        let mut app = WaveletApp::new(Some(std::env::temp_dir().join("wavelet-lyrics.png")));
+        let id = app.tracks.first().map(|t| t.id.clone()).expect("the demo songs exist");
+        app.current = Some(id);
+        app.view = View::Lyrics;
+        app.lyrics_state = 2;
+        app.lyrics = Some(Lyrics { timed: true, lines: vec![(5.0, "First line".into()), (30.0, "Second line".into())] });
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 800.0)));
+        for (pos, want) in [(10.0f32, 0usize), (31.0, 1)] {
+            app.player.seek(pos);
+            let _ = ctx.run(raw.clone(), |ctx| app.main_ui(ctx));
+            assert_eq!(app.lyrics_line, want, "the page follows the song at {pos}s");
+        }
+    }
 }
