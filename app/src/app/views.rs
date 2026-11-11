@@ -583,7 +583,7 @@ impl WaveletApp {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Chart songs").font(bold(22.0)));
-            ui.label(RichText::new("· 30-second previews by Deezer · right-click a song for the full version on Spotify").color(TEXT));
+            ui.label(RichText::new(online::chart_note()).color(TEXT));
         });
         ui.add_space(4.0);
         let q = self.search.trim().to_string();
@@ -672,7 +672,7 @@ impl WaveletApp {
 
     fn home_hits(&mut self, ui: &mut Ui) {
         let ids = self.hits.clone();
-        self.section_title(ui, "Top chart hits", "· 30-second previews by Deezer · right-click a song for the full version", &ids);
+        self.section_title(ui, "Top chart hits", &online::chart_note(), &ids);
         ui.add_space(4.0);
         if self.hits_state < 2 {
             ui.horizontal(|ui| {
@@ -750,6 +750,40 @@ impl WaveletApp {
                 }
             });
             if let Some((m, ok)) = &self.key_msg {
+                ui.add_space(6.0);
+                ui.label(RichText::new(m).color(if *ok { ACCENT } else { Color32::from_rgb(255, 110, 110) }));
+            }
+        });
+    }
+
+    /// Whole songs instead of 30-second previews: one click sets up the helper program.
+    fn full_songs_box(&mut self, ui: &mut Ui, w: f32) {
+        let on = online::full_songs_available();
+        section_box(ui, w, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Full-length songs").font(bold(18.0)));
+                if on {
+                    ui.label(RichText::new("● On").color(ACCENT));
+                }
+            });
+            ui.add_space(4.0);
+            if on {
+                ui.label(RichText::new("Every song plays its whole length, like the original. Songs you pick from the charts are fetched in full, so they no longer stop after 30 seconds.").color(SUBTLE));
+            } else if online::phone() {
+                ui.label(RichText::new("On the phone, chart songs play their whole length whenever an independent artist has a whole version, and a 30-second preview otherwise. The computer app can fetch every chart song in full.").color(SUBTLE));
+            } else if online::full_songs_missing() == "ffmpeg" {
+                ui.label(RichText::new("The full-song helper is here, but ffmpeg is needed to turn songs into something the player can play. Install it, then come back.").color(SUBTLE));
+                ui.add_space(4.0);
+                ui.hyperlink_to("ffmpeg.org/download.html", online::FFMPEG_SITE);
+            } else {
+                ui.label(RichText::new("Songs from the charts play a 30-second preview, because the catalogue that lists them only shares that much of each song. Turn this on and the app fetches the whole song instead.").color(SUBTLE));
+                ui.add_space(8.0);
+                let label = if self.full_tool_busy { "Getting full-length songs…" } else { "Turn on full-length songs" };
+                if pill_button(ui, label, 250.0, 36.0, ACCENT, BG).clicked() {
+                    self.pending.push(Action::GetFullSongs);
+                }
+            }
+            if let Some((m, ok)) = &self.full_tool_msg {
                 ui.add_space(6.0);
                 ui.label(RichText::new(m).color(if *ok { ACCENT } else { Color32::from_rgb(255, 110, 110) }));
             }
@@ -966,6 +1000,8 @@ impl WaveletApp {
                 self.acct_msg = Some(("Name saved.".into(), true));
             }
         }
+        ui.add_space(16.0);
+        self.full_songs_box(ui, w);
         ui.add_space(16.0);
         self.real_music_box(ui, w);
         if let Some((m, ok)) = &self.acct_msg {

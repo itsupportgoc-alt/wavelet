@@ -259,11 +259,12 @@ pub fn online_to_track(o: &crate::online::OnlineTrack, cache_dir: &Path) -> Trac
         artist: o.artist.clone(),
         album: o.album.clone(),
         genre: "Online".into(),
-        duration: o.duration,
         source: TrackSource::Online { url: o.audio.clone(), cache: cache_dir.join(format!("{}_{}.mp3", o.prefix(), o.id)) },
         hue: hue_of(&o.album),
         cover: if o.cover.is_empty() { None } else { Some(o.cover.clone()) },
-        preview: o.is_preview(),
+        // A catalogue song only plays 30 seconds when the full-song helper is missing.
+        preview: o.is_preview() && !crate::online::full_songs_available(),
+        duration: if o.is_preview() && !crate::online::full_songs_available() { 30.0 } else { o.duration },
     }
 }
 

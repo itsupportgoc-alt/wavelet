@@ -124,6 +124,334 @@ pub fn full_search(query: &str, limit: u32) -> Result<Vec<OnlineTrack>, String> 
     Ok(t)
 }
 
+// ------------------------------------------------------------ full-length songs
+
+/// Folder for helper programs (yt-dlp, which fetches a song's whole audio).
+static TOOLS: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// Where the helper was found (outer `None` = not looked for yet).
+static YTDLP: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
+/// Where ffmpeg was found (outer `None` = not looked for yet).
+static FFMPEG: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
+
+/// Tell the app where it may keep helper programs (its own data folder).
+pub fn set_tools_dir(dir: PathBuf) {
+    if let Ok(mut t) = TOOLS.lock() {
+        *t = Some(dir);
+    }
+}
+
+fn tools_dir() -> PathBuf {
+    if let Ok(t) = TOOLS.lock() {
+        if let Some(d) = t.as_ref() {
+            return d.clone();
+        }
+    }
+    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("Wavelet").join("bin")
+}
+
+/// Name of the full-song helper on this computer.
+fn tool_name() -> &'static str {
+    if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    }
+}
+
+fn find_tool() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("WAVELET_YTDLP") {
+        let p = PathBuf::from(p.trim());
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let local = tools_dir().join(tool_name());
+    if local.is_file() {
+        return Some(local);
+    }
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let c = dir.join(tool_name());
+        if c.is_file() {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// The program that fetches a song's whole audio, when this computer has one.
+pub fn yt_dlp() -> Option<PathBuf> {
+    let mut cache = match YTDLP.lock() {
+        Ok(c) => c,
+        Err(_) => return find_tool(),
+    };
+    if cache.is_none() {
+        *cache = Some(find_tool());
+    }
+    cache.as_ref().and_then(|p| p.clone())
+}
+
+/// Look for the helper again (after it has been downloaded).
+pub fn refresh_tools() {
+    if let Ok(mut c) = YTDLP.lock() {
+        *c = None;
+    }
+    if let Ok(mut c) = FFMPEG.lock() {
+        *c = None;
+    }
+}
+
+/// True when songs play their whole length instead of a 30-second preview.
+pub fn full_songs_available() -> bool {
+    yt_dlp().is_some() && ffmpeg().is_some()
+}
+
+/// What still has to be installed for full-length songs: "helper", "ffmpeg" or nothing.
+pub fn full_songs_missing() -> &'static str {
+    match (yt_dlp().is_some(), ffmpeg().is_some()) {
+        (false, _) => "helper",
+        (true, false) => "ffmpeg",
+        (true, true) => "",
+    }
+}
+
+/// The program that turns a downloaded song into a file the player can decode.
+fn ffmpeg() -> Option<PathBuf> {
+    let mut cache = match FFMPEG.lock() {
+        Ok(c) => c,
+        Err(_) => return find_ffmpeg(),
+    };
+    if cache.is_none() {
+        *cache = Some(find_ffmpeg());
+    }
+    cache.as_ref().and_then(|p| p.clone())
+}
+
+fn find_ffmpeg() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("WAVELET_FFMPEG") {
+        let p = PathBuf::from(p.trim());
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let local = tools_dir().join(name);
+    if local.is_file() {
+        return Some(local);
+    }
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let c = dir.join(name);
+        if c.is_file() {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// True on the phone app, which can't run the desktop helper program.
+pub fn phone() -> bool {
+    cfg!(target_os = "android")
+}
+
+/// What the song lists say about chart songs right now.
+pub fn chart_note() -> String {
+    if full_songs_available() {
+        "· full songs · right-click a song for more options".into()
+    } else if phone() {
+        "· whole songs where an artist has one · 30-second preview otherwise".into()
+    } else {
+        "· 30-second previews · turn on full-length songs in your Profile".into()
+    }
+}
+
+/// Web address of the helper for this computer.
+fn tool_url() -> &'static str {
+    if cfg!(windows) {
+        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    } else if cfg!(target_os = "macos") {
+        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+    } else {
+        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+    }
+}
+
+/// Download the full-song helper into the app's folder. Returns where it went.
+#[cfg(not(target_os = "android"))]
+pub fn install_full_support() -> Result<PathBuf, String> {
+    if let Some(p) = yt_dlp() {
+        return Ok(p);
+    }
+    let dest = tools_dir().join(tool_name());
+    download(tool_url(), &dest)?;
+    let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+    if size < 1_000_000 {
+        let _ = std::fs::remove_file(&dest);
+        return Err("The full-song helper didn't download properly. Check your connection, then try again.".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+    }
+    refresh_tools();
+    match yt_dlp() {
+        Some(p) => Ok(p),
+        None => Err("The full-song helper couldn't be started. Try again.".into()),
+    }
+}
+
+/// Phones can't run the helper: they keep the previews.
+#[cfg(target_os = "android")]
+pub fn install_full_support() -> Result<PathBuf, String> {
+    Err("Full-length songs need the computer version of the app.".into())
+}
+
+/// True when the first bytes are a song file the player can decode.
+fn playable_audio(b: &[u8]) -> bool {
+    b.len() > 12 && (b.starts_with(b"ID3") || (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) || b.starts_with(b"OggS") || b.starts_with(b"fLaC") || b.get(4..8) == Some(b"ftyp"))
+}
+
+/// Download the song's whole length (the original recording) into `part`.
+///
+/// The helper finds the song from its name and artist and hands it to ffmpeg, which
+/// produces a plain mp3 — the same shape as the previews, so playback, seeking and the
+/// cached copy all keep working the way they already did.
+fn download_full_song(part: PathBuf, query: String, cache: PathBuf, st2: Arc<StreamState>) {
+    let (Some(exe), Some(ff)) = (yt_dlp(), ffmpeg()) else {
+        stream_fail(&st2, "Full-length songs need their helper program. Turn them on in your profile.".into());
+        return;
+    };
+    let ffdir = ff.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let _ = std::fs::remove_file(&part);
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([
+        "--no-warnings",
+        "--quiet",
+        "--no-playlist",
+        "-x",
+        "--audio-format",
+        "mp3",
+        "--audio-quality",
+        "5",
+        "--ffmpeg-location",
+        &ffdir.to_string_lossy(),
+        "-o",
+        &part.to_string_lossy(),
+        &format!("ytsearch1:{query}"),
+    ]);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            stream_fail(&st2, "The full-song helper couldn't start. Try again in a moment.".into());
+            return;
+        }
+    };
+    // Report the song's size as it is written, and give up on a download that hangs.
+    let started = std::time::Instant::now();
+    loop {
+        if let Ok(m) = std::fs::metadata(&part) {
+            st2.got.store(m.len(), Ordering::SeqCst);
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if started.elapsed().as_secs() > 300 {
+            let _ = child.kill();
+            let _ = child.wait();
+            stream_fail(&st2, "This song took too long to download. Check your connection, then try again.".into());
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let _ = child.wait();
+    let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    st2.got.store(size, Ordering::SeqCst);
+    st2.total.store(size, Ordering::SeqCst);
+    let head = std::fs::File::open(&part).and_then(|mut f| {
+        let mut buf = [0u8; 16];
+        let n = f.read(&mut buf)?;
+        Ok(buf[..n].to_vec())
+    });
+    if size < 1024 || !head.map(|h| playable_audio(&h)).unwrap_or(false) {
+        let _ = std::fs::remove_file(&part);
+        stream_fail(&st2, "This song couldn't be fetched in full. Try it again, or pick another song.".into());
+        return;
+    }
+    // Keep a finished copy so the song plays instantly next time.
+    let tmp = cache.with_extension(format!("tmp{}", fastrand::u32(..)));
+    if std::fs::copy(&part, &tmp).is_ok() && std::fs::rename(&tmp, &cache).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    st2.done.store(true, Ordering::SeqCst);
+}
+
+// ------------------------------------------------------------ whole songs without the helper
+
+fn words(s: &str) -> Vec<String> {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .filter(|w| w.len() > 1)
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// Best full-length version of a song among `list`, or none when nothing really matches.
+fn pick_full_version(list: Vec<OnlineTrack>, title: &str, artist: &str) -> Option<OnlineTrack> {
+    let want = words(title);
+    if want.is_empty() {
+        return None;
+    }
+    let by = words(artist);
+    let mut best: Option<(i32, OnlineTrack)> = None;
+    for t in list {
+        if t.duration < 60.0 {
+            continue;
+        }
+        let have = words(&t.title);
+        let hits = want.iter().filter(|w| have.iter().any(|h| h == *w)).count();
+        if hits == 0 {
+            continue;
+        }
+        // Every word of the song's name should be there; extra words ("cover", "remix") cost a little.
+        let mut score = hits as i32 * 10 - (have.len().saturating_sub(want.len()) as i32) * 2;
+        if !by.is_empty() {
+            let theirs = words(&t.artist);
+            if theirs.iter().any(|w| by.contains(w)) {
+                score += 25;
+            }
+        }
+        if t.duration >= 120.0 {
+            score += 5;
+        }
+        if best.as_ref().map_or(true, |(b, _)| score > *b) {
+            best = Some((score, t));
+        }
+    }
+    best.filter(|(score, _)| *score >= 10).map(|(_, t)| t)
+}
+
+/// The song's whole length from a service that shares whole songs, no helper needed.
+/// Phones use this; the desktop app fetches every chart song in full instead.
+pub fn full_version(title: &str, artist: &str) -> Option<OnlineTrack> {
+    let list = full_search(&format!("{title} {artist}"), 12).ok()?;
+    pick_full_version(list, title, artist)
+}
+
+/// Where to get ffmpeg, which turns songs into files the player can decode.
+pub const FFMPEG_SITE: &str = "https://ffmpeg.org/download.html";
+
 // ------------------------------------------------------------ Deezer catalogue (no key)
 
 const DEEZER: &str = "https://api.deezer.com";
@@ -145,7 +473,8 @@ pub fn parse_deezer(body: &[u8]) -> Result<Vec<OnlineTrack>, String> {
             title: r["title"].as_str().unwrap_or("").to_string(),
             artist: r["artist"]["name"].as_str().unwrap_or("").to_string(),
             album: r["album"]["title"].as_str().unwrap_or("").to_string(),
-            duration: 30.0,
+            // The song's real length; the preview clip is only 30 seconds of it.
+            duration: r["duration"].as_f64().unwrap_or(30.0) as f32,
             audio: preview,
             service: "deezer".into(),
             cover: r["album"]["cover_medium"].as_str().unwrap_or("").to_string(),
@@ -372,13 +701,19 @@ fn stream_fail(st: &StreamState, msg: String) {
     st.done.store(true, Ordering::SeqCst);
 }
 
-/// Start downloading a song to `cache`. For catalogue previews (`dz_id`), a fresh link
-/// is fetched first because old ones expire.
-pub fn start_stream(url: String, dz_id: Option<String>, cache: PathBuf) -> Arc<StreamState> {
+/// Start downloading a song to `cache`. For catalogue songs (`dz_id`), the whole song is
+/// fetched when the helper is installed — otherwise the 30-second preview, whose link is
+/// refreshed first because old ones expire.
+pub fn start_stream(url: String, dz_id: Option<String>, full_query: Option<String>, cache: PathBuf) -> Arc<StreamState> {
     if let Some(p) = cache.parent() {
         let _ = std::fs::create_dir_all(p);
     }
-    let part = cache.with_extension(format!("part{}", fastrand::u32(..)));
+    // The whole song arrives as one finished file, so playback starts once it is there.
+    let whole = match (&full_query, &dz_id) {
+        (Some(q), Some(_)) if full_songs_available() => Some(q.clone()),
+        _ => None,
+    };
+    let part = if whole.is_some() { cache.with_extension(format!("part{}.mp3", fastrand::u32(..))) } else { cache.with_extension(format!("part{}", fastrand::u32(..))) };
     let st = Arc::new(StreamState {
         got: AtomicU64::new(0),
         total: AtomicU64::new(0),
@@ -386,32 +721,43 @@ pub fn start_stream(url: String, dz_id: Option<String>, cache: PathBuf) -> Arc<S
         error: Mutex::new(None),
         part: part.clone(),
     });
-    let file = match File::create(&part) {
-        Ok(f) => f,
-        Err(e) => {
-            stream_fail(&st, format!("Couldn't save the song: {e}"));
-            return st;
-        }
-    };
     let st2 = st.clone();
     let st3 = st.clone();
-    std::thread::spawn(move || {
-        // A damaged download must never close the app.
-        if let Err(e) = crate::safe::catch(move || download_into(file, url, dz_id, cache, part, st2)) {
-            stream_fail(&st3, format!("This song couldn't be downloaded ({e})."));
+    match whole {
+        Some(query) => {
+            std::thread::spawn(move || {
+                // A damaged download must never close the app.
+                if let Err(e) = crate::safe::catch(move || download_full_song(part, query, cache, st2)) {
+                    stream_fail(&st3, format!("This song couldn't be downloaded ({e})."));
+                }
+            });
         }
-    });
+        None => {
+            let file = match File::create(&part) {
+                Ok(f) => f,
+                Err(e) => {
+                    stream_fail(&st, format!("Couldn't save the song: {e}"));
+                    return st;
+                }
+            };
+            std::thread::spawn(move || {
+                if let Err(e) = crate::safe::catch(move || download_into(file, url, dz_id, cache, part, st2)) {
+                    stream_fail(&st3, format!("This song couldn't be downloaded ({e})."));
+                }
+            });
+        }
+    }
     st
 }
 
 fn download_into(file: File, url: String, dz_id: Option<String>, cache: PathBuf, part: PathBuf, st2: Arc<StreamState>) {
     {
         let mut file = file;
-        let url = match dz_id {
-            Some(id) => fresh_preview(&id).unwrap_or(url),
+        let target = match &dz_id {
+            Some(id) => fresh_preview(id).unwrap_or(url),
             None => url,
         };
-        let (mut rd, len) = match open_body(&url) {
+        let (mut rd, len) = match open_body(&target) {
             Ok(x) => x,
             Err(e) => {
                 stream_fail(&st2, e);
@@ -631,6 +977,87 @@ mod tests {
         println!("found {} / cover {} bytes", t[0].title, cover.len());
     }
 
+    /// Real network: a chart song downloads and decodes its whole length, not 30 seconds.
+    #[test]
+    #[ignore]
+    fn live_full_chart_song() {
+        if super::yt_dlp().is_none() {
+            println!("no full-song helper on this computer; skipping");
+            return;
+        }
+        let song = catalog_search("blinding lights the weeknd", 1).expect("search works")[0].clone();
+        let query = format!("{} {} official audio", song.title, song.artist);
+        let cache = std::env::temp_dir().join(format!("wavelet-full-{}.mp3", song.id));
+        let _ = std::fs::remove_file(&cache);
+        let st = super::start_stream(song.audio.clone(), Some(song.id.clone()), Some(query), cache.clone());
+        assert!(super::full_songs_available());
+        let t0 = std::time::Instant::now();
+        while !st.done.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed().as_secs() < 120 {
+            assert!(st.failed().is_none(), "{:?}", st.failed());
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let size = std::fs::metadata(&cache).expect("song saved").len();
+        let dec = rodio::Decoder::new(std::io::BufReader::new(std::fs::File::open(&cache).unwrap())).expect("whole song decodes");
+        use rodio::Source;
+        let len = dec.total_duration().map(|d| d.as_secs_f32()).unwrap_or(0.0);
+        println!("'{}' by {}: {} KB, {:.0}s (catalogue says {:.0}s) in {:?}", song.title, song.artist, size / 1024, len, song.duration, t0.elapsed());
+        assert!(size > 1_000_000, "a whole song, not the 30-second preview");
+        assert!(len > 90.0, "should be minutes long, was {len:.0}s");
+        // The app's own playback path: the song plays, and it is minutes long.
+        let track = crate::library::online_to_track(&song, &std::env::temp_dir());
+        assert!(!track.preview && track.duration > 90.0);
+        let mut pl = crate::player::Player::new(true);
+        pl.set_volume(0.2);
+        pl.load_stream(&track, &st).expect("song loads");
+        pl.play();
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        let pos = pl.position();
+        println!("playing: position {pos:.2}s of {:.0}s", pl.duration());
+        assert!(pos > 1.0, "the full song should be playing");
+        pl.stop();
+    }
+
+    #[test]
+    fn picks_a_matching_whole_song() {
+        let t = |id: &str, title: &str, artist: &str, secs: f32| OnlineTrack {
+            id: id.into(),
+            title: title.into(),
+            artist: artist.into(),
+            album: String::new(),
+            duration: secs,
+            audio: String::new(),
+            service: "audius".into(),
+            cover: String::new(),
+        };
+        let list = vec![
+            t("a", "Blinding Lights", "MRecord", 155.0),
+            t("b", "Sign of the Times", "Cover Band", 240.0),
+            t("c", "Blinding Lights", "The Weeknd", 200.0),
+            t("d", "Blinding Lights (30s clip)", "Someone", 30.0),
+        ];
+        let got = pick_full_version(list, "Blinding Lights", "The Weeknd").unwrap();
+        assert_eq!(got.id, "c", "the artist's own full song wins");
+        // Nothing that resembles the song: no swap, the preview stays.
+        let list = vec![t("x", "Completely Different", "Nobody", 200.0)];
+        assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
+        // A clip is never used instead of the whole song.
+        let list = vec![t("y", "Blinding Lights", "The Weeknd", 30.0)];
+        assert!(pick_full_version(list, "Blinding Lights", "The Weeknd").is_none());
+    }
+
+    /// Real network: a chart song finds a whole version without any helper program.
+    #[test]
+    #[ignore]
+    fn live_full_version_lookup() {
+        let song = catalog_search("blinding lights the weeknd", 1).expect("search works")[0].clone();
+        let full = full_version(&song.title, &song.artist).expect("a whole version exists");
+        println!("{} -> {} by {} ({:.0}s)", song.title, full.title, full.artist, full.duration);
+        assert!(full.duration > 90.0);
+        let p = std::env::temp_dir().join("wavelet-full-version.mp3");
+        download(&full.audio, &p).unwrap();
+        assert!(std::fs::metadata(&p).unwrap().len() > 500_000);
+    }
+
     /// Real network: wrong key gives the friendly message; a song file downloads.
     #[test]
     #[ignore]
@@ -668,7 +1095,7 @@ mod stream_probe {
         let t = &trend[0];
         let cache = std::env::temp_dir().join(format!("wavelet-stream-{}.mp3", t.id));
         let _ = std::fs::remove_file(&cache);
-        let st = super::start_stream(t.audio.clone(), None, cache.clone());
+        let st = super::start_stream(t.audio.clone(), None, None, cache.clone());
         let t0 = std::time::Instant::now();
         while !st.ready() && t0.elapsed().as_secs() < 60 {
             assert!(st.failed().is_none(), "{:?}", st.failed());
