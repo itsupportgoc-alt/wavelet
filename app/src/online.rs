@@ -259,7 +259,7 @@ pub fn chart_note() -> String {
     if full_songs_available() {
         "· full songs · right-click a song for more options".into()
     } else if phone() {
-        "· whole songs where an artist has one · 30-second preview otherwise".into()
+        "· whole versions are added as each song is found · 30-second preview otherwise".into()
     } else {
         "· 30-second previews · turn on full-length songs in your Profile".into()
     }
@@ -1056,6 +1056,23 @@ mod tests {
         let p = std::env::temp_dir().join("wavelet-full-version.mp3");
         download(&full.audio, &p).unwrap();
         assert!(std::fs::metadata(&p).unwrap().len() > 500_000);
+    }
+
+    /// Real network: how many of today's chart songs have a whole version (what a phone can play).
+    #[test]
+    #[ignore]
+    fn live_whole_version_coverage() {
+        let hits = top_hits(8).expect("charts load");
+        let mut whole = 0;
+        for s in &hits {
+            let found = full_version(&s.title, &s.artist);
+            if found.is_some() {
+                whole += 1;
+            }
+            let shown = found.as_ref().map(|x| format!("{} by {} ({:.0}s)", x.title, x.artist, x.duration));
+            println!("{:<34} {:<20} -> {}", s.title, s.artist, shown.unwrap_or_else(|| "no whole version".into()));
+        }
+        println!("{whole} of {} chart songs have a whole version", hits.len());
     }
 
     /// Real network: wrong key gives the friendly message; a song file downloads.

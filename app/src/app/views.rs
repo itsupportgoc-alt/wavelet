@@ -958,6 +958,8 @@ impl WaveletApp {
                         ui.label(RichText::new(line).color(SUBTLE));
                     });
                 }
+                ui.add_space(6.0);
+                ui.label(RichText::new(format!("Wavelet {}", crate::VERSION)).color(SUBTLE));
             });
         };
         let mut save_name = false;
