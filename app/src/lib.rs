@@ -4,6 +4,7 @@ pub mod accounts;
 pub mod app;
 pub mod library;
 pub mod lyrics;
+pub mod spotify;
 pub mod m4a;
 pub mod online;
 pub mod player;

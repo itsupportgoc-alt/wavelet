@@ -622,7 +622,13 @@ impl WaveletApp {
         });
         let dz = id.strip_prefix("dz:").map(|s| s.to_string());
         // Chart songs play in full when the helper is there.
-        let full = self.online_meta.get(id).filter(|o| o.is_catalogue()).map(|o| format!("{} {} official audio", o.title, o.artist));
+        // Ask for the song by its own name: brackets and guest credits make the
+        // search miss ("Perfect (Live) [feat. X]" is not a song anyone uploaded).
+        let full = self.online_meta.get(id).filter(|o| o.is_catalogue()).map(|o| {
+            let title = crate::lyrics::clean_title(&o.title);
+            let artist = o.artist.split(',').next().unwrap_or(&o.artist).trim();
+            format!("{} {} official audio", title, artist)
+        });
         self.streams
             .entry(id.to_string())
             .or_insert_with(|| online::start_stream(url.to_string(), dz, full, cache.to_path_buf()))

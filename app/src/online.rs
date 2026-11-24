@@ -42,12 +42,13 @@ impl OnlineTrack {
     }
     /// A song from the catalogue: the real songs people search for.
     pub fn is_catalogue(&self) -> bool {
-        self.service == "deezer"
+        matches!(self.service.as_str(), "deezer" | "spotify")
     }
     /// Short tag used in ids and cache file names.
     pub fn prefix(&self) -> &'static str {
         match self.service.as_str() {
             "deezer" => "dz",
+            "spotify" => "sp",
             "audius" => "au",
             _ => "jam",
         }
@@ -843,7 +844,8 @@ pub fn clean_query(q: &str) -> String {
     }
 }
 
-pub fn catalog_search(query: &str, limit: u32) -> Result<Vec<OnlineTrack>, String> {
+/// Search one catalogue that does not need a key.
+fn deezer_search(query: &str, limit: u32) -> Result<Vec<OnlineTrack>, String> {
     let url = format!("{DEEZER}/search?q={}&limit={limit}", encode(&clean_query(query)));
     match http_get(&url).and_then(|b| parse_deezer(&b)) {
         Ok(t) => Ok(t),
@@ -852,6 +854,15 @@ pub fn catalog_search(query: &str, limit: u32) -> Result<Vec<OnlineTrack>, Strin
             std::thread::sleep(std::time::Duration::from_millis(1200));
             parse_deezer(&http_get(&url)?)
         }
+    }
+}
+
+/// Songs matching the search, from Spotify's own catalogue when it answers,
+/// because those are the songs people actually look for.
+pub fn catalog_search(query: &str, limit: u32) -> Result<Vec<OnlineTrack>, String> {
+    match crate::spotify::search(&clean_query(query), limit) {
+        Ok(list) if !list.is_empty() => Ok(list),
+        _ => deezer_search(query, limit),
     }
 }
 
@@ -883,6 +894,12 @@ fn chart_tracks(limit: u32) -> Result<Vec<OnlineTrack>, String> {
 /// chart so the list also shows what is big right now.
 pub fn top_hits(limit: u32) -> Result<Vec<OnlineTrack>, String> {
     let limit = limit.max(1) as usize;
+    // Spotify's own charts first: what the whole world is playing right now.
+    if let Ok(list) = crate::spotify::charts(limit as u32) {
+        if !list.is_empty() {
+            return Ok(list);
+        }
+    }
     let mut out: Vec<OnlineTrack> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut trouble: Option<String> = None;
@@ -890,7 +907,7 @@ pub fn top_hits(limit: u32) -> Result<Vec<OnlineTrack>, String> {
         if out.len() >= limit {
             break;
         }
-        match catalog_search(artist, 6) {
+        match deezer_search(artist, 6) {
             Ok(list) => {
                 // Their own most popular song, not a collaboration they merely appear on.
                 if let Some(t) = list.into_iter().find(|t| t.artist.to_lowercase() == artist.to_lowercase()) {
@@ -1103,10 +1120,12 @@ pub fn start_stream(url: String, dz_id: Option<String>, full_query: Option<Strin
     }
     // A whole song comes from the helper program when it is there, and straight from the music
     // service when it isn't. Either way the song plays its real length.
-    let whole = match (&full_query, &dz_id) {
-        (Some(q), Some(_)) if full_songs_available() => Some((true, q.clone())),
-        (Some(q), Some(_)) => Some((false, q.clone())),
-        _ => None,
+    // Any catalogue song (the ones that only have a search, not a direct audio address)
+    // is fetched as a whole song; songs with their own audio address are streamed.
+    let whole = match &full_query {
+        Some(q) if full_songs_available() => Some((true, q.clone())),
+        Some(q) => Some((false, q.clone())),
+        None => None,
     };
     let part = match &whole {
         Some((true, _)) => cache.with_extension(format!("part{}.mp3", fastrand::u32(..))),
@@ -1446,6 +1465,17 @@ mod tests {
     }
 
     /// Real network: the song's own audio is found and decodes, with no helper program.
+    /// Real network: a search now looks things up on Spotify, and its songs can play.
+    #[test]
+    #[ignore]
+    fn live_search_finds_spotify_songs() {
+        let list = catalog_search("perfect ed sheeran", 5).expect("a search");
+        println!("{:?}", list.iter().map(|t| format!("{} — {}", t.title, t.artist)).collect::<Vec<_>>());
+        assert!(list.iter().any(|t| t.track_id().starts_with("sp:")), "the results are Spotify's");
+        assert!(list.iter().any(|t| t.title.to_lowercase().contains("perfect")));
+        assert!(list.iter().all(|t| t.is_catalogue() && t.duration > 30.0), "real songs, real lengths");
+    }
+
     #[test]
     #[ignore]
     fn live_whole_song() {
